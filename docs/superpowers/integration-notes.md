@@ -1,0 +1,100 @@
+# micro-kiki integration notes
+
+Exploration done 2026-04-17 from Phase 3 Task 3.1 of the operationalization plan.
+
+## Micro-kiki routing topology
+
+Three router implementations live in the user's `~/KIKI-Mac_tunner/` checkout:
+
+1. **`scripts/micro_kiki/meta_router.py:141` — `MetaRouter(nn.Module)`**
+   - The trainable MLX/PyTorch router. Takes a blended hidden-state vector
+     (mid + last transformer layer, dim `h_dim=3072` for Qwen3.5-4B) and
+     outputs 32 sigmoid scores (one per LoRA stack).
+   - Pipeline: `input_proj -> global_attn -> domain_cross_attn -> mlp_fusion -> sigmoid`.
+   - Trained offline; exported to CoreML for production.
+
+2. **`scripts/micro_kiki/moe_lora.py:122` — `.route(x)` method**
+   - Inference-time routing over the 32 LoRA stacks inside the MoE layer.
+   - Takes an MLX array and returns `(scores, indices)` for top-k expert selection.
+
+3. **`src/serving/ane_router.py:9` — `ANERouter`**
+   - Thin CoreML wrapper for the `MetaRouter` export.
+   - Currently **stub**: `.route(embedding) -> [0.0] * 37` (not yet wired to real
+     CoreML model at the time of exploration). 37 vs 32 discrepancy to be resolved
+     upstream before integration.
+
+## Recommended extension point for kiki-flow advisory
+
+**Primary target:** `scripts/micro_kiki/moe_lora.py` `.route()` method
+(line 122). This is where the final stack-selection decision is made
+at inference time, and it already takes an MLX array that can be
+converted to a numpy-based kiki-flow input.
+
+**Secondary target (production):** once `src/serving/ane_router.py` is
+wired to the real CoreML model, that becomes the better attach point
+because it sits on the hot path with well-defined latency budget.
+
+## Wire-up sketch
+
+Add an optional `kiki_flow_runner: StreamingRunner | None = None`
+parameter to the routing class. In `.route()`, before returning the
+final decision:
+
+```python
+if self.kiki_flow_runner is not None:
+    try:
+        # Convert MLX array x to numpy, flatten to state vector
+        state_flat = np.asarray(x).astype(np.float32).reshape(-1)[:self.kiki_flow_runner.surrogate.state_dim]
+        query_embed = self.kiki_flow_runner.encoder.encode(
+            self._query_string  # assuming this is tracked for logging
+        )
+        delta = self.kiki_flow_runner.surrogate.forward(state_flat, query_embed)
+        advisory_weights = np.tanh(delta) * 0.1  # 10 percent prior
+        scores = scores + mx.array(advisory_weights)
+    except Exception:  # noqa: BLE001 - advisory must never crash routing
+        pass  # fall through to native scores
+```
+
+Gated by an env flag `KIKI_FLOW_ENABLED=1` on the router constructor
+so default behavior is unchanged.
+
+## Latency budget
+
+Measured on GrosMac M5: p50 = 0.04 ms, p99 = 0.06 ms with stub encoder.
+With real MiniLM MLX encoder: add ~3 ms at p50. Total additional
+latency: < 5 ms per query, well within any reasonable production SLO.
+
+## Dimensionality mismatch to resolve
+
+- `MetaRouter` outputs 32 scores; `ANERouter` stub returns 37.
+- `kiki-flow-research` T3 surrogate is `state_dim=16` by default
+  (4 ortho species x 4-value grid). For a 32-stack production router,
+  the surrogate needs to be retrained with `state_dim=32 * 4 = 128`.
+- Action: retrain T3 surrogate in Mode-A against real micro-kiki
+  LoRA trajectories once they are available (current Mode-B uses
+  pure 4-species trajectories from the paper track).
+
+## Open dependencies before PR can be filed
+
+1. `ANERouter` 37 vs 32 discrepancy resolved.
+2. T3 surrogate retrained at `state_dim=128` on real LoRA trajectories.
+3. Query-string plumbing through the router call path (currently only
+   the hidden-state vector reaches `.route()`; the user query string is
+   absorbed earlier).
+4. Feature-flag plumbing in micro-kiki's config loader.
+
+## PR filing procedure (when deps resolved)
+
+1. Branch from `~/KIKI-Mac_tunner/main`: `feat/kiki-flow-advisory`.
+2. Patch `scripts/micro_kiki/moe_lora.py` as sketched above.
+3. Add `KIKI_FLOW_ENABLED` to the config with default 0.
+4. Run `uv run pytest` inside `~/KIKI-Mac_tunner/` (existing tests
+   must still pass with flag off).
+5. `gh pr create` with title
+   `"feat(routing): optional kiki-flow advisory hook"`.
+6. Body follows the template in
+   `docs/superpowers/plans/2026-04-17-kiki-flow-operationalization.md`
+   Task 3.2.5.
+
+Current status: **blocked on the four open dependencies above**, which
+are maintainer calls rather than kiki-flow-research changes.
