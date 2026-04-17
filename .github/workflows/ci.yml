@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        python-version: ["3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install ${{ matrix.python-version }}
+      - run: uv sync --all-extras
+      - run: uv run ruff check .
+      - run: uv run mypy kiki_flow_core
+      - run: uv run pytest -v --cov=kiki_flow_core --cov-fail-under=80
+      - name: Reproducibility double-run
+        run: |
+          uv run pytest tests/test_smoke_e2e.py::test_double_run_deterministic -v
