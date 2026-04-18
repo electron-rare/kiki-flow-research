@@ -6,6 +6,7 @@
 #   "peft>=0.13",
 #   "datasets>=3.0",
 #   "accelerate>=0.34",
+#   "bitsandbytes>=0.44",
 # ]
 # ///
 """Standalone LoRA fine-tuning script for the CL LLM benchmark.
@@ -43,10 +44,11 @@ from typing import Any
 import numpy as np
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    BitsAndBytesConfig,
     Trainer,
     TrainingArguments,
 )
@@ -90,7 +92,22 @@ def build_model_and_tokenizer(base_model: str) -> tuple[Any, Any]:
     tokenizer = AutoTokenizer.from_pretrained(base_model)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    model = AutoModelForSequenceClassification.from_pretrained(base_model, num_labels=2)
+    # 4-bit quantization via bitsandbytes (NF4 + double-quant + bfloat16 compute).
+    # Lets Qwen3-4B fit in ~4 GB VRAM; LoRA trains on top of the frozen 4-bit base.
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+    )
+    model = AutoModelForSequenceClassification.from_pretrained(
+        base_model,
+        num_labels=2,
+        quantization_config=bnb_config,
+        device_map="auto",
+    )
+    # Prepare base for k-bit training (cast norms to fp32, enable grad on inputs).
+    model = prepare_model_for_kbit_training(model)
     # Make sure the model knows about the pad token for classification head.
     model.config.pad_token_id = tokenizer.pad_token_id
     return model, tokenizer
@@ -172,13 +189,14 @@ def main() -> None:
         logging_steps=max(1, args.n_steps // 10),
         seed=args.seed,
         report_to=[],
+        bf16=True,
     )
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         compute_metrics=compute_accuracy,
     )
     trainer.train()
