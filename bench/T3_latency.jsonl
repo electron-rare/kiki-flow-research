@@ -1,1 +1,2 @@
-{"ts": 1713403200, "machine": "GrosMac-M5", "weights": "v0.1", "p50_ms": 0.04, "p99_ms": 0.06, "n": 500, "encoder": "stub", "mode": "B"}
+{"ts": 1713403200, "machine": "GrosMac-M5", "weights": "v0.1", "p50_ms": 0.04, "p99_ms": 0.06, "n": 500, "encoder": "stub", "mode": "B", "state_dim": 16}
+{"ts": 1713484800, "machine": "GrosMac-M5", "weights": "v0.2-d128", "p50_ms": 0.37, "p99_ms": 0.53, "n": 500, "encoder": "stub", "mode": "A", "state_dim": 128}
