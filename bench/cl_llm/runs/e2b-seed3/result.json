@@ -1,0 +1,32 @@
+{
+  "mode": "real",
+  "status": "ok",
+  "seed": 3,
+  "tasks": [
+    "phono_sst2",
+    "lex_cola",
+    "syn_boolq"
+  ],
+  "immediate_accuracy": {
+    "phono_sst2": 0.925,
+    "lex_cola": 0.8166666666666667,
+    "syn_boolq": 0.575
+  },
+  "final_accuracy": {
+    "phono_sst2": 0.7933333333333333,
+    "lex_cola": 0.91,
+    "syn_boolq": 0.575
+  },
+  "forgetting": {
+    "phono_sst2": 0.1316666666666667,
+    "lex_cola": 0.0,
+    "syn_boolq": 0.0
+  },
+  "final_adapter": "~/bench_runs/3_syn_boolq/lora_adapter",
+  "adapters": {
+    "phono_sst2": "~/bench_runs/3_phono_sst2/lora_adapter",
+    "lex_cola": "~/bench_runs/3_lex_cola/lora_adapter",
+    "syn_boolq": "~/bench_runs/3_syn_boolq/lora_adapter"
+  },
+  "wall_time_s": 289.73645281791687
+}
