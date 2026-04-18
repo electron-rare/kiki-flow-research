@@ -201,14 +201,24 @@ illustrating the metastability of the consolidated state.
   \label{fig:phase}
 \end{figure}
 
-\subsection{Fast vs rigorous runtime}
+\subsection{Fast vs rigorous runtime and agreement}
+% runtimes from paper/stats.json and paper_rigorous/stats.json;
+% KL from paper/fast_vs_rigorous_kl.json
 Fast path: 5 seeds $\times$ 100 slow $\times$ 10\,000 particles completes
 in \textbf{2\,min 31\,s} on a GrosMac M5. Rigorous path (with POT Sinkhorn
 prox) completes in \textbf{84\,min} on the same hardware
-(35\,$\times$ slower per JKO step). Trajectories from both paths are
-qualitatively similar (by visual inspection of Figure \ref{fig:phase});
-a quantitative comparison of the KL divergence between their final
-distributions is left to the sensitivity study in the companion repository.
+(35\,$\times$ slower per JKO step). A native-MLX Sinkhorn reduces
+the rigorous overhead to $5.13\times$ (bench/sinkhorn\_backend\_bench.jsonl).
+
+\paragraph{Quantitative agreement.} On matched seeds
+(reduced setup: grid 16, 500 particles, 20 slow steps), the two paths
+yield final distributions differing by
+$\mathrm{KL}(\rho_{\text{rigorous}} \| \rho_{\text{fast}}) =
+0.000638 \pm 0.000265$ bits (max $0.000937$), summed over the four
+species, averaged over 5 seeds. The fast path is therefore
+numerically within $\sim\!0.06\%$ of the rigorous path, justifying
+its use for the headline figures. Full per-seed data in
+\texttt{paper/fast\_vs\_rigorous\_kl.json}.
 
 \subsection{Aggregate final-state statistics}
 Over the five seeds of the fast path with the default flat

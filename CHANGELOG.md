@@ -2,6 +2,51 @@
 
 All notable releases of `kiki-flow-research`. Dates in YYYY-MM-DD.
 
+## [paper-v0.7-draft] — 2026-04-18
+
+### Added
+- `scripts/fast_vs_rigorous_kl.py` — measures KL divergence between
+  fast-path and rigorous-path final distributions on matched seeds.
+- `paper/fast_vs_rigorous_kl.json` — records KL per seed + aggregate.
+
+### Changed
+- Paper §5.2 replaces the qualitative "trajectories are qualitatively
+  similar" with a measured mean KL of $6.4 \times 10^{-4}$ bits (5
+  seeds, max $9.4 \times 10^{-4}$), confirming fast path is within
+  $\sim 0.06\%$ of rigorous path.
+
+## [paper-v0.6-draft] — 2026-04-18
+
+### Added
+- `scripts/cl_benchmark_ewc.py` with `EWCTaskF` class.
+- Analytical Fisher diagonal $F_i = 2 + \lambda_{\text{KL}} / \rho_i$.
+- `paper/cl_benchmark_ewc.json`; `paper/figures/fig5_cl_gap_ewc.{png,pdf}`.
+
+### Changed
+- Paper §5 CL section rewritten: 3-arm comparison (without / naive /
+  EWC). EWC restores task2 $60\times$ vs naive.
+- Abstract adds a fourth claim (iv) on the stability/plasticity
+  trade-off and Fisher resolution.
+
+## [paper-v0.5-draft] — 2026-04-18
+
+### Added
+- `scripts/hyperparam_sweep_dense.py` — 72-config sweep.
+- `kiki_flow_core/track2_paper/mlx_wasserstein.py` `mlx_prox_w2`.
+- `kiki_flow_core/track2_paper/full_jko_solver.py` `MLXFullJKOSolver`.
+- `JKOStep` strategy-pattern `prox_fn` parameter for MLX/POT switching.
+- `sinkhorn_backend = Literal['pot', 'mlx']` flag on `run_paper`.
+- `tests/track2_paper/test_mlx_prox_w2.py` (5 tests incl. POT parity).
+- `paper/figures/fig6_heatmap.{png,pdf}` entropy landscape.
+- `bench/sinkhorn_backend_bench.jsonl` with measured $5.13\times$
+  MLX-over-POT speedup on GrosMac M5.
+
+### Changed
+- Best specialization point moves to $(\alpha, \beta, \gamma) = (10, 1, 0)$
+  with gap $2.04$ bits (51 % below max) vs $1.40$ bits in the coarse
+  sweep.
+- Abstract and experiments updated; issues #3 closed, #2 fully closed.
+
 ## [paper-v0.4-draft] — 2026-04-18
 
 First releasable paper with measured data on every figure.
