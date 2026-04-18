@@ -62,6 +62,10 @@ class LoRATrainerReal:
     confirmation when dry_run is False."""
 
     REMOTE_SCRIPT = "~/kiki-flow-research-kxkm/train_cl_task.py"
+    # Absolute path — non-interactive SSH sessions don't load ~/.profile on
+    # kxkm-ai, so PATH doesn't include ~/.local/bin and a bare ``uv`` would
+    # trigger rc=127 ("command not found").
+    REMOTE_UV = "$HOME/.local/bin/uv"
 
     def __init__(
         self,
@@ -75,7 +79,7 @@ class LoRATrainerReal:
 
     def build_command(self, dataset_path: Path) -> list[str]:
         return [
-            "uv",
+            self.REMOTE_UV,
             "run",
             self.REMOTE_SCRIPT,
             "--base-model",

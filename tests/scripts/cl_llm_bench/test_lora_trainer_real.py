@@ -19,7 +19,7 @@ def test_lora_trainer_real_builds_correct_command(tmp_path: Path) -> None:
     )
     trainer = LoRATrainerReal(cfg, ssh_host="kxkm-ai", dry_run=True)
     cmd = trainer.build_command(dataset_path=tmp_path / "data.jsonl")
-    assert cmd[0] == "uv"
+    assert cmd[0].endswith("uv"), f"expected uv path, got {cmd[0]!r}"
     assert cmd[1] == "run"
     assert "train_cl_task.py" in " ".join(cmd)
     assert "--lora-rank" in cmd
