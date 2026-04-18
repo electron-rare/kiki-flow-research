@@ -89,6 +89,34 @@ forgetting under pressure of later tasks, positive transfer mid-sequence.
 Source: `bench/cl_llm/runs/e2_5seeds_summary.json`. Reproduce via
 `docs/superpowers/runbooks/real-cl-bench.md`.
 
+### Bridge-as-EWC-prior (prototype)
+
+**Status: PROTOTYPE — pending measurement.** Bridge arm of the real-LLM
+CL benchmark is now architecturally active via
+`run_cl_bench --bridge-ewc-lambda <lam>`. For each CL task i >= 1 the
+trainer receives a 32-dim advisory computed locally from task i-1's
+train texts (`KikiFlowBridge.route_advisory`, averaged over up to 128
+samples), expanded uniformly to the 72 LoRA modules of Qwen3-4B
+(36 layers x {q_proj, v_proj}). The advisory multiplies a per-module
+EWC-style quadratic penalty on the resumed adapter weights:
+
+```
+L_total = L_CE + bridge_ewc_lambda * sum_m F_layer[m] * (theta_m - theta_prev_m)^2
+```
+
+theta_prev is snapshotted once at the start of each task's training and
+held constant. With `--bridge-ewc-lambda 0.0` (default) or no advisory
+JSON present, the penalty is skipped entirely and training is identical
+to the baseline (bit-identical for stub mode, observationally identical
+for real mode).
+
+Real-mode comparison runs are deferred until the currently active E3
+5-seed sweep finishes on kxkm-ai. Numbers (forgetting per task, with vs
+without the EWC prior, across 5 seeds) will be filled in here and in
+paper §3.4 once the GPU is free. The only deliverable for the prototype
+is the wiring + tests + this placeholder. Source:
+`scripts/cl_llm_bench/run_cl_bench.py` + `kxkm_trainer/train_cl_task.py`.
+
 **BoolQ ablation (measured).** Three controlled runs on seed 0
 isolate what was limiting BoolQ:
 

@@ -19,9 +19,14 @@ import time
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
+
 from scripts.cl_llm_bench.eval_forgetting import forgetting_score
 from scripts.cl_llm_bench.lora_trainer import LoRATrainerReal, LoRATrainingConfig
 from scripts.cl_llm_bench.task_sequences import TASK_REGISTRY, load_task_sequence
+
+_BRIDGE_WEIGHTS_PATH = Path("kiki_flow_core/track3_deploy/weights/v0.2-d128.safetensors")
+_ADVISORY_SAMPLE_N = 128
 
 Mode = Literal["stub", "preflight", "real"]
 
@@ -296,7 +301,53 @@ def _ssh_run_trainer(ssh_host: str, cmd: list[str]) -> dict[str, Any]:
         raise RuntimeError(msg) from e
 
 
-def _run_real(
+def _compute_task_advisory(
+    task_dict: dict[str, Any], sample_n: int = _ADVISORY_SAMPLE_N
+) -> np.ndarray | None:
+    """Aggregate the bridge advisory over a task's first ``sample_n`` train texts.
+
+    Runs entirely on the local machine — the KikiFlowBridge stays out of
+    the remote trainer's PEP-723 env. Returns ``None`` when the bridge
+    is disabled, missing, or produced no non-null vectors.
+    """
+    # Lazy import — kiki_flow_core is a heavy tree; only pay on real mode.
+    from kiki_flow_core.track3_deploy.kiki_flow_bridge import (  # noqa: PLC0415
+        KikiFlowBridge,
+    )
+
+    bridge = KikiFlowBridge(weights_path=_BRIDGE_WEIGHTS_PATH)
+    if not bridge.enabled:
+        return None
+    entry = TASK_REGISTRY.get(task_dict["name"])
+    if entry is None:
+        return None
+    text_field = entry["text_field"]
+    texts = [rec.get(text_field, "") for rec in task_dict.get("train", [])[:sample_n]]
+    vecs: list[np.ndarray] = []
+    for t in texts:
+        w = bridge.route_advisory(str(t))
+        if w is not None:
+            vecs.append(w)
+    if not vecs:
+        return None
+    mean: np.ndarray = np.mean(np.stack(vecs, axis=0), axis=0)
+    return mean
+
+
+def _write_advisory_json(task_name: str, advisory: np.ndarray, local_path: Path) -> Path:
+    """Dump ``{"task": ..., "advisory": [...]}`` as JSON next to the dataset."""
+    local_path = Path(local_path)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    local_path.write_text(
+        json.dumps(
+            {"task": task_name, "advisory": [float(x) for x in advisory.tolist()]},
+            indent=2,
+        )
+    )
+    return local_path
+
+
+def _run_real(  # noqa: PLR0913
     task_names: list[str],
     output_dir: Path,
     seed: int,
@@ -305,6 +356,7 @@ def _run_real(
     max_samples: int = 500,
     base_model: str = "Qwen/Qwen3-4B",
     n_steps: int = 500,
+    bridge_ewc_lambda: float = 0.0,
 ) -> dict[str, Any]:
     """Real-mode CL sequence: train sequentially on ``task_names`` with LoRA
     adapter resume between tasks, then evaluate the final adapter on every
@@ -346,7 +398,14 @@ def _run_real(
 
     try:
         return _run_real_sequence(
-            task_names, output_dir, seed, ssh_host, max_samples, base_model, n_steps
+            task_names,
+            output_dir,
+            seed,
+            ssh_host,
+            max_samples,
+            base_model,
+            n_steps,
+            bridge_ewc_lambda,
         )
     except Exception as e:  # noqa: BLE001
         # Any unexpected failure inside the loop surfaces as a structured
@@ -354,7 +413,7 @@ def _run_real(
         return _fail("cl_sequence", str(e), seed)
 
 
-def _run_real_sequence(  # noqa: PLR0911
+def _run_real_sequence(  # noqa: PLR0911, PLR0912, PLR0913, PLR0915
     task_names: list[str],
     output_dir: Path,
     seed: int,
@@ -362,6 +421,7 @@ def _run_real_sequence(  # noqa: PLR0911
     max_samples: int,
     base_model: str,
     n_steps: int,
+    bridge_ewc_lambda: float = 0.0,
 ) -> dict[str, Any]:
     """Inner loop for the CL sequence. Each per-stage failure returns a
     ``_fail(...)`` dict; unexpected exceptions bubble up to ``_run_real``
@@ -393,6 +453,10 @@ def _run_real_sequence(  # noqa: PLR0911
     immediate_acc: dict[str, float] = {}
     remote_adapter: str | None = None
     remote_adapter_paths: dict[str, str] = {}
+    # Per-task bridge advisory, computed from task i's train texts right
+    # after task i is trained. The advisory for task i is fed to task i+1's
+    # trainer as an EWC-prior signal (weight on prior-task LoRA weights).
+    prev_advisory_remote: str | None = None
     for i, td in enumerate(task_dicts):
         name = td["name"]
         remote_output = f"~/bench_runs/{seed}_{name}"
@@ -410,6 +474,16 @@ def _run_real_sequence(  # noqa: PLR0911
         cmd = trainer.build_command(dataset_path=Path(remote_jsonl_by_task[name]))
         if remote_adapter is not None:
             cmd += ["--resume-adapter", remote_adapter]
+        # Bridge-as-EWC-prior: only active for tasks i >= 1 (need a prior
+        # adapter AND a prior advisory), when lambda > 0 and the advisory
+        # actually exists.
+        if bridge_ewc_lambda > 0.0 and prev_advisory_remote is not None:
+            cmd += [
+                "--bridge-advisory-json",
+                prev_advisory_remote,
+                "--bridge-ewc-lambda",
+                str(bridge_ewc_lambda),
+            ]
         try:
             manifest = _ssh_run_trainer(ssh_host, cmd)
         except Exception as e:  # noqa: BLE001
@@ -423,6 +497,27 @@ def _run_real_sequence(  # noqa: PLR0911
         immediate_acc[name] = float(manifest.get("eval_accuracy", 0.0))
         remote_adapter = f"{remote_output}/lora_adapter"
         remote_adapter_paths[name] = remote_adapter
+
+        # Compute + ship task i's advisory if the next task will need it.
+        # Bridge import is lazy; disabled bridge => silently skip.
+        if bridge_ewc_lambda > 0.0 and i < len(task_dicts) - 1:
+            try:
+                advisory = _compute_task_advisory(td)
+            except Exception:  # noqa: BLE001
+                advisory = None
+            if advisory is not None:
+                local_adv = output_dir / f"{name}_advisory.json"
+                try:
+                    _write_advisory_json(name, advisory, local_adv)
+                    _rsync_up(local_adv, ssh_host, _REMOTE_DATASET_DIR)
+                    prev_advisory_remote = f"{_REMOTE_DATASET_DIR}/{local_adv.name}"
+                except Exception:  # noqa: BLE001
+                    # Advisory failures are advisory-only — fall back to
+                    # unregularized training on the next task rather than
+                    # aborting the sequence.
+                    prev_advisory_remote = None
+            else:
+                prev_advisory_remote = None
 
     final_adapter = remote_adapter  # adapter after the last training step
 
@@ -473,7 +568,7 @@ def _run_real_sequence(  # noqa: PLR0911
     }
 
 
-def run_cl_bench(
+def run_cl_bench(  # noqa: PLR0913
     task_names: list[str],
     mode: Mode,
     output_dir: Path,
@@ -483,6 +578,7 @@ def run_cl_bench(
     max_samples: int = 500,
     base_model: str = "Qwen/Qwen3-4B",
     n_steps: int = 500,
+    bridge_ewc_lambda: float = 0.0,
 ) -> dict[str, Any]:
     """Orchestrate CL benchmark in stub, preflight, or real mode.
 
@@ -534,6 +630,7 @@ def run_cl_bench(
             max_samples=max_samples,
             base_model=base_model,
             n_steps=n_steps,
+            bridge_ewc_lambda=bridge_ewc_lambda,
         )
         (output_dir / "result.json").write_text(json.dumps(result, indent=2))
         return result
@@ -613,6 +710,17 @@ def main() -> int:
         default=500,
         help="Training steps per task for real mode (default: 500).",
     )
+    parser.add_argument(
+        "--bridge-ewc-lambda",
+        type=float,
+        default=0.0,
+        help=(
+            "When > 0, tasks i >= 1 receive a bridge-weighted EWC penalty "
+            "over the resumed LoRA weights. Requires the bridge to be "
+            "available locally (KIKI_FLOW_ENABLED=1 + v0.2-d128 weights). "
+            "Default 0.0 disables the penalty — bit-identical to baseline."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -629,6 +737,7 @@ def main() -> int:
             max_samples=args.max_samples,
             base_model=args.base_model,
             n_steps=args.n_steps,
+            bridge_ewc_lambda=args.bridge_ewc_lambda,
         )
         print(json.dumps(result, indent=2))
         return 0

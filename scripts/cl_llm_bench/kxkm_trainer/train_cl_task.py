@@ -49,22 +49,42 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import torch
-from datasets import load_dataset
-from peft import LoraConfig, PeftModel, TaskType, get_peft_model, prepare_model_for_kbit_training
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    BitsAndBytesConfig,
-    Trainer,
-    TrainingArguments,
-)
+
+# Heavy ML deps live in the remote PEP-723 env on kxkm-ai. The local test
+# env does NOT install them but still imports the pure helpers below
+# (_expand_advisory_to_modules, _load_advisory). Guarded import keeps
+# ``from ... import _expand_advisory_to_modules`` cheap on the local side.
+try:
+    import torch
+    from datasets import load_dataset
+    from peft import (
+        LoraConfig,
+        PeftModel,
+        TaskType,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
+    from transformers import (
+        AutoModelForSequenceClassification,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        Trainer,
+        TrainingArguments,
+    )
+
+    _HEAVY_OK = True
+except ImportError:  # noqa: BLE001
+    _HEAVY_OK = False
+    if TYPE_CHECKING:  # pragma: no cover — type stubs only
+        import torch
+        from transformers import Trainer, TrainingArguments
 
 # ---- Setup ----------------------------------------------------------------
 
@@ -113,6 +133,28 @@ def parse_args() -> argparse.Namespace:
             "Skip training; evaluate --resume-adapter (or freshly initialized "
             "LoRA) on the full --dataset. Used to measure final-adapter "
             "accuracy on prior tasks after a CL sequence."
+        ),
+    )
+    p.add_argument(
+        "--bridge-advisory-json",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSON with a single key 'advisory' mapping to a length-32 "
+            "list of floats. When set together with a non-zero "
+            "--bridge-ewc-lambda, the LoRA training loss is augmented with a "
+            "per-module EWC penalty weighted by the advisory (expanded from "
+            "32 stacks to the number of LoRA modules via uniform bucketing)."
+        ),
+    )
+    p.add_argument(
+        "--bridge-ewc-lambda",
+        type=float,
+        default=0.0,
+        help=(
+            "Scalar multiplier for the bridge-as-EWC-prior penalty. 0.0 "
+            "(default) or absent --bridge-advisory-json disables the penalty "
+            "entirely — behavior is identical to the baseline trainer."
         ),
     )
     return p.parse_args()
@@ -225,6 +267,87 @@ def compute_accuracy(eval_preds: Any) -> dict[str, float]:
     return {"accuracy": float((preds == labels).mean())}
 
 
+# ---- Bridge-as-EWC-prior --------------------------------------------------
+
+
+def _expand_advisory_to_modules(advisory: np.ndarray, n_modules: int) -> np.ndarray:
+    """Expand a 32-stack advisory to per-LoRA-module weights.
+
+    Uniform bucketing: module m -> stack min(n_stacks-1, m // bucket_size)
+    with ``bucket_size = ceil(n_modules / n_stacks)``. Uniform input -> uniform output.
+    """
+    n_stacks = int(advisory.shape[0])
+    if n_stacks == 0 or n_modules <= 0:
+        return np.zeros(max(0, n_modules), dtype=np.float32)
+    bucket_size = max(1, math.ceil(n_modules / n_stacks))
+    idx = np.minimum(n_stacks - 1, np.arange(n_modules) // bucket_size)
+    return advisory.astype(np.float32)[idx]
+
+
+def _load_advisory(path: Path) -> np.ndarray | None:
+    """Load ``{"advisory": [...]}`` JSON. None on any failure or all-zero."""
+    try:
+        blob = json.loads(Path(path).read_text())
+    except Exception:  # noqa: BLE001
+        return None
+    adv_list = blob.get("advisory") if isinstance(blob, dict) else None
+    if not isinstance(adv_list, list) or not adv_list:
+        return None
+    arr = np.asarray(adv_list, dtype=np.float32)
+    return arr if np.any(arr) else None
+
+
+if _HEAVY_OK:
+
+    def _build_bridge_ewc_trainer(  # noqa: PLR0913
+        model: Any,
+        training_args: TrainingArguments,
+        train_ds: Any,
+        eval_ds: Any,
+        tokenizer: Any,
+        advisory: np.ndarray,
+        lam: float,
+    ) -> tuple[Trainer, dict[str, Any]]:
+        """Build a Trainer subclass adding a bridge-weighted EWC penalty."""
+        lora_params: list[tuple[str, Any]] = [
+            (name, p) for name, p in model.named_parameters() if p.requires_grad and "lora_" in name
+        ]
+        n_modules = len(lora_params)
+        module_w = _expand_advisory_to_modules(advisory.astype(np.float32), n_modules=n_modules)
+        device = next(model.parameters()).device
+        theta_prev: list[Any] = [p.detach().clone() for _, p in lora_params]
+        f_layer = torch.tensor(module_w, dtype=torch.float32, device=device)
+
+        class _BridgeEWCTrainer(Trainer):  # type: ignore[misc,valid-type]
+            def compute_loss(  # type: ignore[override]
+                self, model: Any, inputs: Any, return_outputs: bool = False, **kwargs: Any
+            ) -> Any:
+                outputs = super().compute_loss(
+                    model, inputs, return_outputs=return_outputs, **kwargs
+                )
+                base_loss = outputs[0] if return_outputs else outputs
+                penalty = torch.zeros((), dtype=base_loss.dtype, device=base_loss.device)
+                for idx, (_name, p) in enumerate(lora_params):
+                    w = f_layer[idx].to(dtype=base_loss.dtype)
+                    prev = theta_prev[idx].to(dtype=base_loss.dtype, device=base_loss.device)
+                    penalty = penalty + w * (p - prev).pow(2).sum()
+                total = base_loss + lam * penalty
+                return (total, outputs[1]) if return_outputs else total
+
+        trainer = _BridgeEWCTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=eval_ds,
+            processing_class=tokenizer,
+            compute_metrics=compute_accuracy,
+        )
+        return trainer, {
+            "bridge_advisory_sum": float(advisory.sum()),
+            "n_params_regularized": n_modules,
+        }
+
+
 # ---- Main -----------------------------------------------------------------
 
 
@@ -295,14 +418,31 @@ def main() -> None:
         report_to=[],
         bf16=True,
     )
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_ds,
-        eval_dataset=eval_ds,
-        processing_class=tokenizer,
-        compute_metrics=compute_accuracy,
-    )
+    # Optional bridge-as-EWC-prior wiring. Active only when BOTH
+    # --bridge-advisory-json (non-zero) and --bridge-ewc-lambda > 0.
+    advisory_arr: np.ndarray | None = None
+    if args.bridge_advisory_json is not None and args.bridge_ewc_lambda > 0.0:
+        advisory_arr = _load_advisory(args.bridge_advisory_json)
+    ewc_info: dict[str, Any] = {}
+    if advisory_arr is not None:
+        trainer, ewc_info = _build_bridge_ewc_trainer(
+            model=model,
+            training_args=training_args,
+            train_ds=train_ds,
+            eval_ds=eval_ds,
+            tokenizer=tokenizer,
+            advisory=advisory_arr,
+            lam=float(args.bridge_ewc_lambda),
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_ds,
+            eval_dataset=eval_ds,
+            processing_class=tokenizer,
+            compute_metrics=compute_accuracy,
+        )
     trainer.train()
 
     # Save LoRA adapter
@@ -324,6 +464,10 @@ def main() -> None:
         "lora_rank": args.lora_rank,
         "lora_alpha": args.lora_alpha,
         "resume_adapter": str(args.resume_adapter) if args.resume_adapter else None,
+        "bridge_ewc_lambda": float(args.bridge_ewc_lambda),
+        "bridge_advisory_active": advisory_arr is not None,
+        "bridge_advisory_sum": ewc_info.get("bridge_advisory_sum"),
+        "n_params_regularized": ewc_info.get("n_params_regularized"),
         "timestamp": time.time(),
     }
     (args.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))

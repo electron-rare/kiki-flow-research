@@ -65,12 +65,28 @@ Until `train_cl_task.py` is pushed to kxkm-ai and preflight goes fully green,
    ```
 3. Run with bridge (same command, plus `KIKI_FLOW_ENABLED=1` exported locally
    before the run — the bridge is consumed by `AdvisoryRecorder` in-process).
-4. Repeat for seeds 1-4.
-5. `rsync kxkm-ai:~/bench_runs/ bench/cl_llm/runs/` back to GrosMac.
-6. Regenerate fig7+fig8 from the collected `summary.json`s (see
+4. Run with bridge-as-EWC-prior (prototype, second arm of the sweep). Adds a
+   per-LoRA-module EWC penalty to each task i >= 1 weighted by the advisory
+   computed from task i-1's train texts. The flag requires the bridge to be
+   available locally (`KIKI_FLOW_ENABLED=1` plus
+   `kiki_flow_core/track3_deploy/weights/v0.2-d128.safetensors` in place); if
+   the advisory comes back empty the run falls back to the unregularized
+   trainer for that task. `0.0` (default) is a no-op, bit-identical to the
+   baseline.
+   ```
+   KIKI_FLOW_ENABLED=1 PYTHONPATH=. uv run python -m scripts.cl_llm_bench.run_cl_bench \
+     --mode real --i-confirm-heavy-training \
+     --tasks phono_sst2,lex_cola,syn_boolq --seed 0 \
+     --bridge-ewc-lambda 0.1 \
+     --output bench/cl_llm/runs/bridge_ewc_seed0 \
+     --ssh-host kxkm-ai
+   ```
+5. Repeat for seeds 1-4.
+6. `rsync kxkm-ai:~/bench_runs/ bench/cl_llm/runs/` back to GrosMac.
+7. Regenerate fig7+fig8 from the collected `summary.json`s (see
    `scripts/cl_llm_bench/run_cl_bench.py` `--mode stub` for an example of how
    the figure generators plug into the summary).
-7. Update `paper/` and `PERFORMANCE.md` with the measured numbers.
+8. Update `paper/` and `PERFORMANCE.md` with the measured numbers.
 
 ## Acceptance
 - Every `bench/cl_llm/runs/*/summary.json` is valid and covers the 3 tasks.
