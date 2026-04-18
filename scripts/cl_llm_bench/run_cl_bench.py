@@ -173,12 +173,27 @@ def _prepare_task_jsonl(task_dict: dict[str, Any], local_path: Path) -> Path:
     return local_path
 
 
+def _ensure_remote_dir(ssh_host: str, remote_dir: str) -> None:
+    """Create ``remote_dir`` on ``ssh_host`` if missing. Replaces rsync ``--mkpath``
+    which is not supported by the macOS-shipped rsync 2.6.9 on GrosMac."""
+    result = subprocess.run(
+        ["ssh", ssh_host, "mkdir", "-p", remote_dir],
+        capture_output=True,
+        text=True,
+        timeout=_RSYNC_TIMEOUT_S,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = f"remote mkdir -p {remote_dir} failed (rc={result.returncode}): {result.stderr[:300]}"
+        raise RuntimeError(msg)
+
+
 def _rsync_up(local_path: Path, ssh_host: str, remote_dir: str) -> None:
     """Copy ``local_path`` to ``ssh_host:remote_dir/``. Raises on failure."""
+    _ensure_remote_dir(ssh_host, remote_dir)
     cmd = [
         "rsync",
         "-a",
-        "--mkpath",
         str(local_path),
         f"{ssh_host}:{remote_dir}/",
     ]
@@ -204,7 +219,6 @@ def _rsync_down(ssh_host: str, remote_path: str, local_path: Path) -> None:
     cmd = [
         "rsync",
         "-a",
-        "--mkpath",
         f"{ssh_host}:{remote_path}",
         str(local_path),
     ]
