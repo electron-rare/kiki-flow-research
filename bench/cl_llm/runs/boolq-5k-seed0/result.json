@@ -1,0 +1,18 @@
+{
+  "task": "syn_boolq",
+  "experiment": "data-limit confirmation",
+  "n_samples": 5000,
+  "train_samples_effective": 4000,
+  "eval_samples": 1000,
+  "n_steps": 1500,
+  "seed": 0,
+  "train_loss_final": 0.6563,
+  "eval_accuracy": 0.652,
+  "wall_time_s_train": 208.3,
+  "comparison": {
+    "500_samples_500_steps": {"train_loss": 0.1036, "eval_accuracy": 0.565, "interpretation": "near random"},
+    "500_samples_2000_steps": {"train_loss": 3.855e-06, "eval_accuracy": 0.592, "interpretation": "memorized, no generalization"},
+    "5000_samples_1500_steps": {"train_loss": 0.6563, "eval_accuracy": 0.652, "interpretation": "real learning"}
+  },
+  "conclusion": "BoolQ is data-limited at rank 8 on 500 samples, not compute-limited. 10x more training data recovers 8.7 pts of eval accuracy without overfit. Full SuperGLUE BoolQ (9427 train) or rank 16+ LoRA expected to close the remaining gap to SOTA."
+}

@@ -89,12 +89,19 @@ forgetting under pressure of later tasks, positive transfer mid-sequence.
 Source: `bench/cl_llm/runs/e2_5seeds_summary.json`. Reproduce via
 `docs/superpowers/runbooks/real-cl-bench.md`.
 
-**BoolQ caveat (measured).** A 2000-step follow-up on seed 0 drives
-training loss to 4 × 10⁻⁶ (total memorization of 500 samples) while
-eval accuracy only moves from 0.565 to 0.592 — BoolQ is data and
-adapter-capacity limited at rank 8, not compute limited. More steps
-overfit rather than help. Source:
-`bench/cl_llm/runs/c-boolq-extended/result.json`.
+**BoolQ ablation (measured).** Three controlled runs on seed 0
+isolate what was limiting BoolQ:
+
+| Setup | Train loss | Eval acc | Regime |
+|---|---|---|---|
+| 500 samples × 500 steps | 0.10 | 0.565 | near-random (in main sweep) |
+| 500 samples × 2000 steps | 4 × 10⁻⁶ | 0.592 | memorized, no generalization |
+| **5000 samples × 1500 steps** | **0.66** | **0.652** | **real learning, no overfit** |
+
+Conclusion: BoolQ is **data-limited** at LoRA r=8, not compute-limited.
+10× more training data gives +8.7 pts without overfit. Full SuperGLUE
+BoolQ (9427 train) or rank 16+ LoRA expected to close the remaining
+gap. Source: `bench/cl_llm/runs/{c-boolq-extended,boolq-5k-seed0}/result.json`.
 
 ## Fast-vs-rigorous agreement
 
