@@ -71,6 +71,34 @@ PYTHONPATH=. uv run python scripts/hyperparam_sweep.py
 cd paper && tectonic main.tex
 ```
 
+### Real-LLM CL benchmark (§3.4, figure 7)
+
+The §3.4 table and fig7 come from a real LoRA fine-tuning run on kxkm-ai
+(RTX 4090). The orchestrator has three modes:
+
+```bash
+# Stub — deterministic summary, runs in CI (no network, no GPU)
+PYTHONPATH=. uv run python -m scripts.cl_llm_bench.run_cl_bench \
+  --mode stub --tasks phono_sst2,lex_cola,syn_boolq \
+  --output bench/cl_llm/runs/stub_0 --seed 0
+
+# Preflight — read-only SSH probe of the remote host
+PYTHONPATH=. uv run python -m scripts.cl_llm_bench.run_cl_bench \
+  --mode preflight --ssh-host kxkm-ai \
+  --tasks phono_sst2,lex_cola,syn_boolq \
+  --output bench/cl_llm/runs/preflight_check --seed 0
+
+# Real — gated by --i-confirm-heavy-training; see runbook for prereqs
+PYTHONPATH=. uv run python -m scripts.cl_llm_bench.run_cl_bench \
+  --mode real --i-confirm-heavy-training --ssh-host kxkm-ai \
+  --tasks phono_sst2,lex_cola,syn_boolq \
+  --output bench/cl_llm/runs/my_run --seed 0 \
+  --max-samples 5000 --n-steps 1500 --base-model Qwen/Qwen3-4B
+```
+
+Full prerequisites, GPU-time budget, and per-seed sweep recipe are in
+[`docs/superpowers/runbooks/real-cl-bench.md`](docs/superpowers/runbooks/real-cl-bench.md).
+
 Run the full test suite:
 
 ```bash
@@ -128,11 +156,15 @@ kiki-flow-research/
 │   ├── track2_paper/               # Particles + JKO + figures
 │   └── track3_deploy/              # Pure-numpy surrogate + streaming runner
 ├── tests/                          # 93 tests, 95 % coverage
-├── scripts/                        # 4 reproducibility scripts
+├── scripts/                        # Reproducibility scripts
+│   └── cl_llm_bench/               # Real-LLM CL: stub / preflight / real modes
+│       └── kxkm_trainer/           # Standalone 4-bit QLoRA trainer (runs on kxkm-ai)
 ├── paper/                          # main.tex, main.pdf, figures, JSON stats
 ├── paper_rigorous/                 # 84-min rigorous run artifacts
 ├── bench/                          # SLO latency records
-└── docs/superpowers/               # 4 specs, 5 plans, integration + patches
+│   └── cl_llm/runs/                # Per-seed real-CL manifests + summary
+└── docs/superpowers/               # Specs, plans, integration, patches
+    └── runbooks/real-cl-bench.md   # Real-mode CL manual runbook
 ```
 
 ## Citation

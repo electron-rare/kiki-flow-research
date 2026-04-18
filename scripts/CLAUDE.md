@@ -15,10 +15,33 @@ given the same seeds.
 | `hyperparam_sweep_dense.py` | `paper/hyperparam_sweep_dense.json` | denser follow-up sweep |
 | `dump_t2_pairs.py` | `bench/runs/T2_pairs/*.safetensors` | T3 surrogate trainer input |
 | `dump_hybrid_pairs.py` | `bench/runs/T2_pairs_d128/*.safetensors` | T3 v0.2-d128 trainer input |
+| `cl_llm_bench/` (subpackage) | `bench/cl_llm/runs/<name>/result.json` + `paper/figures/fig7_cl_forgetting.*` | real-LLM CL §3.4 + issue #1 |
 
 Figures live under `paper/figures/`, emitted via the generators in
 `kiki_flow_core/track2_paper/figures/` — scripts call those, never write
 PDFs directly.
+
+## `cl_llm_bench/` subpackage — real-LLM CL with three modes
+
+Unlike the other scripts above (pure Python, single machine, deterministic),
+`cl_llm_bench/` orchestrates a real LoRA fine-tuning loop on a remote GPU
+host. It exposes a CLI with three modes:
+
+- `--mode stub` — synthetic forgetting summary, runs in CI. Plausibility
+  numbers derived from the distributional-proxy runs above. No network.
+- `--mode preflight` — read-only SSH probe of the remote host (weights,
+  datasets, uv, disk, GPU). Returns a structured `preflight.json` with
+  per-check status and a single `ready_for_real` boolean.
+- `--mode real` — gated by `--i-confirm-heavy-training`, launches the
+  full CL sequence: per-task JSONL prep on the local machine, rsync up,
+  SSH-invoke the remote trainer (`scripts/cl_llm_bench/kxkm_trainer/`
+  with PEP-723 inline deps and 4-bit QLoRA), parse manifests, post-sequence
+  evals on prior tasks, compute forgetting, write `result.json`. See
+  `docs/superpowers/runbooks/real-cl-bench.md` for the end-to-end recipe.
+
+Artifacts live under `bench/cl_llm/runs/<run-name>/`; the aggregated
+5-seed summary at `bench/cl_llm/runs/e2_5seeds_summary.json` is the
+single source of truth for the paper §3.4 real-LLM claim.
 
 ## Rules
 

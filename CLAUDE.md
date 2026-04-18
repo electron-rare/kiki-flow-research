@@ -26,6 +26,7 @@ species, modules, hooks, telemetry). Track-specific code lives in subpackages:
 | Paper sources, LaTeX, fast-path figures | `paper/CLAUDE.md` |
 | 84-min rigorous verification run artifacts | `paper_rigorous/CLAUDE.md` |
 | Reproducibility scripts (deterministic, seeded) | `scripts/CLAUDE.md` |
+| Real-LLM CL benchmark (remote GPU, manual) | `docs/superpowers/runbooks/real-cl-bench.md` |
 | Test conventions, golden regressions | `tests/CLAUDE.md` |
 | SLO / latency / backend-speedup ledger | `bench/CLAUDE.md` |
 | Published claims to preserve | `README.md` quantitative-results table |
