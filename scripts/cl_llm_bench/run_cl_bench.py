@@ -38,11 +38,12 @@ set +e
 echo "===train_cl_task==="
 test -f ~/kiki-flow-research-kxkm/train_cl_task.py && echo "ok" || echo "missing"
 echo "===qwen_weights==="
-ls ~/.cache/huggingface 2>/dev/null | grep -i qwen >/dev/null && echo "ok" || echo "missing"
+_qwen=$(ls -d ~/.cache/huggingface/hub/models--Qwen--* 2>/dev/null | head -1)
+[ -n "$_qwen" ] && echo "ok" || echo "missing"
 echo "===hf_datasets==="
 test -d ~/.cache/huggingface/datasets && echo "ok" || echo "missing"
 echo "===uv==="
-which uv >/dev/null 2>&1 && echo "ok" || echo "missing"
+(command -v uv || test -x ~/.local/bin/uv) >/dev/null 2>&1 && echo "ok" || echo "missing"
 echo "===disk_gb==="
 df -BG ~/ | awk 'NR==2 {gsub("G","",$4); print $4}'
 echo "===gpu==="
