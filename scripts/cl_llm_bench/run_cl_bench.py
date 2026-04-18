@@ -12,12 +12,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Literal
 
 from scripts.cl_llm_bench.eval_forgetting import forgetting_score
+from scripts.cl_llm_bench.lora_trainer import LoRATrainerReal, LoRATrainingConfig
+from scripts.cl_llm_bench.task_sequences import TASK_REGISTRY, load_task_sequence
 
 Mode = Literal["stub", "preflight", "real"]
 
@@ -30,6 +34,13 @@ _STUB_AFTER_WITH = (0.81, 0.26, 0.24, 0.30)
 
 # Minimum disk space required for training (GB)
 _MIN_DISK_GB = 50
+
+# Timeouts (seconds) for remote subprocess calls in real mode.
+_RSYNC_TIMEOUT_S = 120
+_SSH_TRAIN_TIMEOUT_S = 3600  # 60-minute cap for single-task training
+
+# Remote layout on kxkm-ai.
+_REMOTE_DATASET_DIR = "~/bench_runs/datasets"
 
 # Preflight check script: READ-ONLY SSH probe for kxkm-ai prerequisites.
 # Uses `set +e` to capture all results without early exit.
@@ -135,18 +146,129 @@ def preflight_report(ssh_host: str) -> dict[str, Any]:
     return report
 
 
-def _run_real(
+def _prepare_task_jsonl(task_dict: dict[str, Any], local_path: Path) -> Path:
+    """Transform a task-sequence dict into a JSONL file of ``{"text", "label"}``.
+
+    The remote trainer expects exactly those two keys. Task-registry tasks
+    carry arbitrary ``text_field`` names (``sentence``, ``question``, ...),
+    so we normalize here. Train + eval are concatenated — the trainer does
+    its own 80/20 split.
+    """
+    name = task_dict["name"]
+    entry = TASK_REGISTRY[name]
+    text_field = entry["text_field"]
+    label_field = entry["label_field"]
+
+    local_path = Path(local_path)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+
+    records = list(task_dict.get("train", [])) + list(task_dict.get("eval", []))
+    with local_path.open("w", encoding="utf-8") as fh:
+        for rec in records:
+            text = rec.get(text_field, "")
+            label = rec.get(label_field, 0)
+            fh.write(
+                json.dumps({"text": str(text), "label": int(label)}, ensure_ascii=False) + "\n"
+            )
+    return local_path
+
+
+def _rsync_up(local_path: Path, ssh_host: str, remote_dir: str) -> None:
+    """Copy ``local_path`` to ``ssh_host:remote_dir/``. Raises on failure."""
+    cmd = [
+        "rsync",
+        "-a",
+        "--mkpath",
+        str(local_path),
+        f"{ssh_host}:{remote_dir}/",
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=_RSYNC_TIMEOUT_S,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = (
+            f"rsync up failed (rc={result.returncode}): "
+            f"{result.stderr[:300] or result.stdout[:300]}"
+        )
+        raise RuntimeError(msg)
+
+
+def _rsync_down(ssh_host: str, remote_path: str, local_path: Path) -> None:
+    """Copy ``ssh_host:remote_path`` down to ``local_path``. Raises on failure."""
+    local_path = Path(local_path)
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "rsync",
+        "-a",
+        "--mkpath",
+        f"{ssh_host}:{remote_path}",
+        str(local_path),
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=_RSYNC_TIMEOUT_S,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = (
+            f"rsync down failed (rc={result.returncode}): "
+            f"{result.stderr[:300] or result.stdout[:300]}"
+        )
+        raise RuntimeError(msg)
+
+
+def _parse_manifest_from_stdout(stdout: str) -> dict[str, Any]:
+    """Extract the last top-level JSON object from the trainer's stdout.
+
+    ``train_cl_task.py`` prints the manifest last via ``json.dumps(..., indent=2)``.
+    We scan for ``{...}`` candidates and return the last one that decodes.
+    """
+    candidates = re.findall(r"\{[\s\S]*?\}(?=\s*$|\s*\{)", stdout) or re.findall(
+        r"\{[\s\S]*\}", stdout
+    )
+    for blob in reversed(candidates):
+        try:
+            parsed = json.loads(blob)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    msg = "Could not find a JSON object in trainer stdout"
+    raise ValueError(msg)
+
+
+def _fail(stage: str, error: str, seed: int) -> dict[str, Any]:
+    """Build a structured ``status=failed`` error dict for real-mode stages."""
+    return {
+        "mode": "real",
+        "status": "failed",
+        "stage": stage,
+        "error": error,
+        "seed": seed,
+    }
+
+
+def _run_real(  # noqa: PLR0911 (each stage returns a structured error dict by design)
     task_names: list[str],
     output_dir: Path,
     seed: int,
     ssh_host: str,
     confirmed: bool,
+    max_samples: int = 500,
+    base_model: str = "Qwen/Qwen3-4B",
 ) -> dict[str, Any]:
-    """Real mode execution: run LoRA trainer on kxkm-ai.
+    """Real mode execution: run LoRA trainer on kxkm-ai for a single task.
 
     This function is ONLY reachable if confirmed=True. Otherwise it raises.
-    First runs preflight checks; aborts if any fail.
-    Then loops over tasks, invoking LoRATrainerReal with dry_run=False.
+    First runs preflight checks; aborts if any fail. E1_min scope: SINGLE
+    task only. If multiple task names are passed, extras are ignored with
+    a stderr WARN; multi-task CL is E2_alt.
     """
     if not confirmed:
         raise RuntimeError(
@@ -159,23 +281,105 @@ def _run_real(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run preflight as a safety gate
+    # Preflight safety gate (all network calls happen AFTER this returns ok).
     preflight = preflight_report(ssh_host)
     if not preflight["ready_for_real"]:
-        # Return structured error, do not raise (caller decides escalation)
         return {
             "mode": "real",
             "status": "preflight_failed",
             "preflight": preflight,
             "seed": seed,
         }
+    if not task_names:
+        return _fail("input", "task_names is empty", seed)
 
-    # Placeholder: real LoRA trainer invocation would happen here.
-    # For now, raise NotImplementedError to signal this is scaffolding.
-    raise NotImplementedError(
-        "LoRATrainerReal integration not yet implemented. "
-        "Preflight checks passed; trainer invocation scaffolding needed."
+    first_task = task_names[0]
+    if len(task_names) > 1:
+        print(
+            f"WARN: E1_min is single-task only; ignoring extra tasks {task_names[1:]}",
+            file=sys.stderr,
+        )
+
+    t_start = time.time()
+
+    # 1. Load the task (train + eval).
+    try:
+        tasks = load_task_sequence([first_task], max_samples=max_samples)
+    except Exception as e:  # noqa: BLE001
+        return _fail("load_task", str(e), seed)
+    task = tasks[0]
+    n_samples = len(task.get("train", [])) + len(task.get("eval", []))
+
+    # 2. Write normalized JSONL locally.
+    local_jsonl = output_dir / f"{first_task}.jsonl"
+    try:
+        _prepare_task_jsonl(task, local_jsonl)
+    except Exception as e:  # noqa: BLE001
+        return _fail("prepare_jsonl", str(e), seed)
+
+    # 3. rsync JSONL up to kxkm-ai.
+    try:
+        _rsync_up(local_jsonl, ssh_host, _REMOTE_DATASET_DIR)
+    except Exception as e:  # noqa: BLE001
+        return _fail("rsync_up", str(e), seed)
+
+    # 4. Build the SSH + trainer invocation.
+    remote_dataset_jsonl = f"{_REMOTE_DATASET_DIR}/{local_jsonl.name}"
+    remote_output_dir = Path(f"~/bench_runs/{seed}_{first_task}")
+    cfg = LoRATrainingConfig(
+        base_model=base_model,
+        lora_rank=8,
+        lora_alpha=16,
+        learning_rate=2e-4,
+        n_steps=500,
+        batch_size=4,
+        output_dir=remote_output_dir,
+        seed=seed,
     )
+    trainer = LoRATrainerReal(cfg, ssh_host, dry_run=False)
+    cmd = trainer.build_command(dataset_path=Path(remote_dataset_jsonl))
+
+    # 5. Execute on the remote host.
+    try:
+        ssh_result = subprocess.run(
+            ["ssh", ssh_host, *cmd],
+            capture_output=True,
+            text=True,
+            timeout=_SSH_TRAIN_TIMEOUT_S,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        return _fail("ssh_train", f"ssh train timed out after {_SSH_TRAIN_TIMEOUT_S}s: {e!s}", seed)
+    except Exception as e:  # noqa: BLE001
+        return _fail("ssh_train", str(e), seed)
+    if ssh_result.returncode != 0:
+        return _fail(
+            "ssh_train", f"ssh rc={ssh_result.returncode}: {ssh_result.stderr[:500]}", seed
+        )
+
+    # 6. Parse the manifest from stdout.
+    try:
+        manifest = _parse_manifest_from_stdout(ssh_result.stdout)
+    except Exception as e:  # noqa: BLE001
+        return _fail("manifest_parse", str(e), seed)
+
+    # 7. rsync the manifest back for provenance.
+    remote_manifest = f"{remote_output_dir}/manifest.json"
+    local_manifest = output_dir / "manifest.json"
+    try:
+        _rsync_down(ssh_host, remote_manifest, local_manifest)
+    except Exception as e:  # noqa: BLE001
+        return _fail("rsync_down", str(e), seed)
+
+    return {
+        "mode": "real",
+        "status": "ok",
+        "task": first_task,
+        "seed": seed,
+        "n_samples": n_samples,
+        "manifest": manifest,
+        "wall_time_s": time.time() - t_start,
+    }
 
 
 def run_cl_bench(
@@ -185,6 +389,8 @@ def run_cl_bench(
     seed: int,
     ssh_host: str = "kxkm-ai",
     confirmed: bool = False,
+    max_samples: int = 500,
+    base_model: str = "Qwen/Qwen3-4B",
 ) -> dict[str, Any]:
     """Orchestrate CL benchmark in stub, preflight, or real mode.
 
@@ -195,6 +401,8 @@ def run_cl_bench(
         seed: Random seed for reproducibility.
         ssh_host: SSH host for real mode (default "kxkm-ai").
         confirmed: Must be True to unlock real mode (requires --i-confirm-heavy-training).
+        max_samples: Per-task sample cap used by ``load_task_sequence`` (real mode only).
+        base_model: HF repo ID passed to the remote trainer (real mode only).
 
     Returns:
         dict[str, Any]: Summary or structured error report.
@@ -225,7 +433,15 @@ def run_cl_bench(
         return preflight
 
     if mode == "real":
-        result = _run_real(task_names, output_dir, seed, ssh_host, confirmed)
+        result = _run_real(
+            task_names,
+            output_dir,
+            seed,
+            ssh_host,
+            confirmed,
+            max_samples=max_samples,
+            base_model=base_model,
+        )
         (output_dir / "result.json").write_text(json.dumps(result, indent=2))
         return result
 
@@ -286,6 +502,18 @@ def main() -> int:
         action="store_true",
         help="REQUIRED for real mode. Confirms user intends to launch GPU training on kxkm-ai.",
     )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=500,
+        help="Per-task sample cap for real mode (default: 500).",
+    )
+    parser.add_argument(
+        "--base-model",
+        type=str,
+        default="Qwen/Qwen3-4B",
+        help="HF repo ID for the base model in real mode (default: Qwen/Qwen3-4B).",
+    )
 
     args = parser.parse_args()
 
@@ -299,6 +527,8 @@ def main() -> int:
             seed=args.seed,
             ssh_host=args.ssh_host,
             confirmed=args.i_confirm_heavy_training,
+            max_samples=args.max_samples,
+            base_model=args.base_model,
         )
         print(json.dumps(result, indent=2))
         return 0

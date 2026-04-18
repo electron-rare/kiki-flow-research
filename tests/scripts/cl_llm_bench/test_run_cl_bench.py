@@ -244,3 +244,65 @@ def test_cli_real_mode_without_confirmation_flag_still_raises(
     )
     rc = main()
     assert rc != 0
+
+
+def test_prepare_task_jsonl_writes_correct_fields(tmp_path: Path) -> None:
+    from scripts.cl_llm_bench.run_cl_bench import _prepare_task_jsonl  # noqa: PLC0415
+
+    task = {
+        "name": "phono_sst2",
+        "species": "phono",
+        "train": [{"sentence": "good movie", "label": 1}, {"sentence": "bad", "label": 0}],
+        "eval": [{"sentence": "ok", "label": 1}],
+    }
+    out = tmp_path / "sst2.jsonl"
+    _prepare_task_jsonl(task, out)
+    lines = out.read_text().splitlines()
+    assert len(lines) == 3  # noqa: PLR2004
+    import json  # noqa: PLC0415
+
+    for line in lines:
+        rec = json.loads(line)
+        assert set(rec.keys()) == {"text", "label"}
+        assert isinstance(rec["text"], str)
+        assert isinstance(rec["label"], int)
+
+
+def test_run_real_returns_structured_error_on_rsync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import subprocess as sp  # noqa: PLC0415
+
+    monkeypatch.setenv("KIKI_FLOW_ENABLED", "0")
+
+    # Force preflight to pass but rsync to fail
+    from scripts.cl_llm_bench import run_cl_bench as rcb  # noqa: PLC0415
+
+    def fake_preflight(host: str) -> dict:
+        return {"host": host, "checks": {}, "ready_for_real": True}
+
+    monkeypatch.setattr(rcb, "preflight_report", fake_preflight)
+
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        call_count["n"] += 1
+
+        class R:
+            returncode = 1
+            stdout = ""
+            stderr = "rsync: connection refused"
+
+        return R()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+
+    out = rcb._run_real(
+        task_names=["phono_sst2"],
+        output_dir=tmp_path,
+        seed=0,
+        ssh_host="bogus",
+        confirmed=True,
+    )
+    assert out["status"] == "failed"
+    assert out["stage"] in {"rsync_up", "ssh_train", "manifest_parse"}
