@@ -36,3 +36,10 @@ def test_blend_advisory_weighted_sum() -> None:
     out = blend_advisory(base, advisory=adv, prior_weight=PRIOR_WEIGHT)
     expected = (1.0 - PRIOR_WEIGHT) * base + PRIOR_WEIGHT * adv
     np.testing.assert_allclose(out, expected, atol=1e-6)
+
+
+def test_blend_advisory_shape_mismatch_returns_base() -> None:
+    base = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    adv = np.array([1.0, 0.0], dtype=np.float32)
+    out = blend_advisory(base, advisory=adv, prior_weight=0.5)
+    np.testing.assert_array_equal(out, base)

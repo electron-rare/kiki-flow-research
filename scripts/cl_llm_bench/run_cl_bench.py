@@ -21,8 +21,8 @@ Mode = Literal["stub", "real"]
 # results in paper/cl_benchmark_ewc.json so the wiring produces
 # non-trivial but deterministic output in CI.
 _STUB_BEFORE = 0.80
-_STUB_AFTER_WITHOUT = (0.29, 0.44, 0.81)
-_STUB_AFTER_WITH = (0.81, 0.26, 0.24)
+_STUB_AFTER_WITHOUT = (0.29, 0.44, 0.81, 0.35)
+_STUB_AFTER_WITH = (0.81, 0.26, 0.24, 0.30)
 
 
 def run_cl_bench(

@@ -17,3 +17,13 @@ def test_run_cl_bench_stub_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert "forgetting_without_bridge" in summary
     assert "forgetting_with_bridge" in summary
     assert (tmp_path / "summary.json").exists()
+
+
+def test_run_cl_bench_real_mode_raises(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="interactive confirmation"):
+        run_cl_bench(
+            task_names=["phono_sst2"],
+            mode="real",
+            output_dir=tmp_path,
+            seed=0,
+        )

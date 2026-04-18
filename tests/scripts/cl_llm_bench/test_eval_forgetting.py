@@ -19,3 +19,10 @@ def test_forgetting_score_positive_on_drop() -> None:
     assert abs(scores["task0"] - 0.60) < TOL
     assert abs(scores["task1"] - 0.45) < TOL
     assert abs(scores["task2"]) < EPSILON
+
+
+def test_forgetting_score_clamps_improvement_to_zero() -> None:
+    before = {"task0": 0.50}
+    after = {"task0": 0.90}
+    scores = forgetting_score(before, after)
+    assert scores["task0"] == 0.0
