@@ -370,124 +370,66 @@ git commit -m "feat(track3): sha256-indexed jko cache"
 
 ## Task 3: CorpusBuilder (B+C sources, dedup, split)
 
+> **Note 2026-04-19** : refactorisé pour ne pas importer `sentence_transformers` (torch interdit par règle repo). L'embedder est désormais injecté en paramètre (`embedder: Callable[[list[str]], np.ndarray] | None`). Les méthodes `dedup_exact` et `dedup_by_embeddings` sont maintenant publiques et séparées. Le test `test_cross_source_dedup` a été remplacé par `test_dedup_by_embeddings_cross_source` (embeddings craftés, sans ML dep) et `test_dedup_exact_only_when_no_embedder`. Commit : voir Job 6 du sprint no-torch.
+
 **Files:**
 - Create: `kiki_flow_core/track3_deploy/data/corpus_builder.py`
 - Test: `tests/track3_deploy/test_corpus_builder.py`
 
-- [ ] **Step 3.1: Write the failing test**
+- [x] **Step 3.1: Write the failing test** (DONE — new injection-pattern API)
 
-Create `tests/track3_deploy/test_corpus_builder.py`:
+Tests implemented with new API (5 tests total, no sentence-transformers):
 
 ```python
-"""Tests for CorpusBuilder — assemble + dedup + stratified split."""
-from __future__ import annotations
+DEDUP_THRESHOLD = 0.92
 
-from pathlib import Path
+def test_exact_dedup() -> None: ...
 
-import pytest
+def test_dedup_by_embeddings_cross_source() -> None:
+    """With crafted near-duplicate embeddings, lower-priority source is dropped."""
+    builder = CorpusBuilder(dedup_threshold=DEDUP_THRESHOLD)
+    embs = np.array([[1.0, 0.0, 0.0], [0.999, 0.001, 0.0]], dtype=np.float32)
+    out = builder.dedup_by_embeddings([e1, e2], embs)
+    assert len(out) == 1 and out[0].source == "B"
 
-from kiki_flow_core.track3_deploy.data.corpus_builder import (
-    CorpusBuilder,
-    CorpusEntry,
-)
-
-
-def _entries(source: str, species: str, n: int, prefix: str = "q") -> list[CorpusEntry]:
-    return [CorpusEntry(text=f"{prefix}_{source}_{i}", source=source, species=species) for i in range(n)]
-
-
-def test_exact_dedup() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = [CorpusEntry(text="bonjour", source="B", species="phono")] * 3
-    out = builder.dedup(entries)
-    assert len(out) == 1
-
-
-def test_cross_source_dedup() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    e1 = CorpusEntry(text="Bonjour, le monde", source="B", species="phono")
-    e2 = CorpusEntry(text="bonjour le monde", source="D", species="phono")  # near dup
-    out = builder.dedup([e1, e2])
-    assert len(out) == 1
-    assert out[0].source == "B"  # B kept, D dropped (cross-source rule)
-
-
-def test_stratified_split_ratios() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = (
-        _entries("B", "phono", 100)
-        + _entries("C", "sem", 200)
-        + _entries("D", "lex", 150, prefix="qD")
-    )
-    splits = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=0)
-    total = len(splits["train"]) + len(splits["val"]) + len(splits["test"])
-    assert total == 450
-    assert 0.78 <= len(splits["train"]) / total <= 0.82
-    assert 0.08 <= len(splits["val"]) / total <= 0.12
-    assert 0.08 <= len(splits["test"]) / total <= 0.12
-
-
-def test_stratification_preserves_source_species() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = _entries("B", "phono", 100) + _entries("C", "sem", 100) + _entries("D", "lex", 100)
-    splits = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=0)
-    # each split must contain all 3 (source, species) tuples
-    for name, s in splits.items():
-        pairs = {(e.source, e.species) for e in s}
-        assert len(pairs) == 3, f"{name} missing strata: {pairs}"
-
-
-def test_frozen_test_split_reproducible() -> None:
-    """Same entries + same seed → identical test split (for corpus_v1_test tag)."""
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = _entries("B", "phono", 100) + _entries("C", "sem", 100)
-    s1 = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=42)
-    s2 = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=42)
-    assert [e.text for e in s1["test"]] == [e.text for e in s2["test"]]
+def test_dedup_exact_only_when_no_embedder(caplog) -> None:
+    """Without embedder, only exact dedup runs + warning logged."""
+    builder = CorpusBuilder(dedup_threshold=DEDUP_THRESHOLD, embedder=None)
+    ...
+    assert any("no embedder" in msg for msg in caplog.messages)
 ```
 
-- [ ] **Step 3.2: Run test to verify it fails**
+- [x] **Step 3.2: Run test to verify it fails** (DONE)
 
-Run: `uv run python -m pytest tests/track3_deploy/test_corpus_builder.py -v`
-Expected: FAIL — `ModuleNotFoundError`.
+- [x] **Step 3.3: Implement CorpusBuilder** (DONE — embedder injectable, no torch)
 
-- [ ] **Step 3.3: Implement CorpusBuilder**
-
-Create `kiki_flow_core/track3_deploy/data/corpus_builder.py`:
+New public API:
 
 ```python
-"""Assemble, dedup, and stratify-split the hybrid corpus for text-bridge training."""
-from __future__ import annotations
+Embedder = Callable[[list[str]], np.ndarray]  # (n, D) float32, normalized
 
-import hashlib
-import random
-import re
-import unicodedata
-from dataclasses import dataclass
-from typing import Iterable
+class CorpusBuilder:
+    def __init__(self, dedup_threshold: float = 0.92, embedder: Embedder | None = None) -> None: ...
+    def dedup_exact(self, entries: Iterable[CorpusEntry]) -> list[CorpusEntry]: ...
+    def dedup_by_embeddings(self, entries: list[CorpusEntry], embeddings: np.ndarray) -> list[CorpusEntry]: ...
+    def dedup(self, entries: Iterable[CorpusEntry]) -> list[CorpusEntry]: ...  # orchestrates both
+```
 
-import numpy as np
+`_embed()` method removed. No `sentence_transformers` import anywhere.
 
+- [x] **Step 3.4: Run test** — 5 passed (no sentence-transformers needed)
 
-@dataclass(frozen=True)
-class CorpusEntry:
-    text: str
-    source: str  # "B", "C", or "D"
-    species: str  # "phono", "sem", "lex", "syntax"  # short names; map to canonical at JKO boundary
+- [x] **Step 3.5: Commit** — see refactor commit in Job 6
 
+---
 
-_SOURCE_PRIORITY = {"B": 0, "C": 1, "D": 2}  # lower = kept on cross-source dup
+## Task 4: SyntheticGenerator (Qwen tunnel)
 
+**Files:**
+- Create: `kiki_flow_core/track3_deploy/data/synth_qwen.py`
+- Test: `tests/track3_deploy/test_synth_qwen.py`
 
-def _normalize(text: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace, NFKD."""
-    text = unicodedata.normalize("NFKD", text).lower()
-    text = re.sub(r"[^\w\s]", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+- [ ] **Step 4.1: Write the failing test with HTTP mock**
     denom = (np.linalg.norm(a) * np.linalg.norm(b)) + 1e-8
     return float(np.dot(a, b) / denom)
 
@@ -1033,6 +975,8 @@ git commit -m "feat(track3): hash+mlp encoder (arch C)"
 ---
 
 ## Task 6: EncoderB_DistilledMiniLM
+
+> **Note 2026-04-19** : le teacher n'est PAS `sentence-transformers`/MiniLM direct (torch interdit). Teacher options : (a) port MLX de MiniLM via `mlx-community`, (b) CamemBERT port flax, (c) embeddings pré-calculés en offline venv séparé, sauvés en `.npz` indexé par `sha256(text)`. L'implémentation de T6 commencera par évaluer la disponibilité de (a), puis retombera sur (c) si pas de port convenable. Teacher output dim = 384 (cible inchangée).
 
 **Files:**
 - Create: `kiki_flow_core/track3_deploy/encoders/distilled.py`

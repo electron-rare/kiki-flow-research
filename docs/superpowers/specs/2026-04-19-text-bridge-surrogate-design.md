@@ -75,11 +75,11 @@ Le remplacement est un pipeline **end-to-end texte→delta** où trois architect
 
 | Composant | Rôle | Localisation | Nouveau / Réutilisé |
 |-----------|------|--------------|---------------------|
-| `CorpusBuilder` | Assemble B+C+D, dedup exact + embedding, split stratifié | `kiki_flow_core/track3_deploy/data/corpus_builder.py` | **Nouveau** |
+| `CorpusBuilder` | Assemble B+C+D, dedup exact + embedding (embedder injecté), split stratifié — **aucune dep torch** | `kiki_flow_core/track3_deploy/data/corpus_builder.py` | **Nouveau** |
 | `SyntheticGenerator` | Prompt Qwen3.5-35B via tunnel `localhost:18000`, species-aware | `track3_deploy/data/synth_qwen.py` | **Nouveau** |
 | `JKOOracle` | Expose `oracle(query) → (state_pre, state_post, rho_by_species)` | Wrapper léger sur solveur JKO existant | **Extension** |
 | `JKOCache` | Cache .safetensors indexé par SHA256(query) pour incrémental | `track3_deploy/data/jko_cache.py` | **Nouveau** |
-| `EncoderB_DistilledMiniLM` | MLP ~2M params imitant MiniLM, loss = MSE vs MiniLM target | `track3_deploy/encoders/distilled.py` | **Nouveau** |
+| `EncoderB_DistilledMiniLM` | MLP ~2M params imitant un teacher MLX (port MiniLM ou équivalent FR), loss = MSE vs teacher target — **pure JAX+MLX, aucune dep torch** | `track3_deploy/encoders/distilled.py` | **Nouveau** |
 | `EncoderC_HashMLP` | Style fastText : n-gram hash → embedding table → MLP, ~520K params | `track3_deploy/encoders/hash_mlp.py` | **Nouveau** |
 | `EncoderD_TinyTransformer` | 4-6 layers, 8 heads, ~8M params, JAX natif | `track3_deploy/encoders/tiny_tf.py` | **Nouveau** |
 | `BridgeHead` | MLP 512→256→256→128 (tanh), identique architecture à v0.2 | `track3_deploy/neural_surrogate.py` | **Réutilisé** |
@@ -119,6 +119,8 @@ syntax:  "Génère une query avec structure syntaxique complexe : dépendances l
 Batch de 50 queries par requête Qwen. Parsing : une query par ligne, strip markers numériques.
 
 ### Pipeline dedup
+
+> **Note architecturale (2026-04-19)** : la règle repo interdit PyTorch. Par conséquent, l'embedder MiniLM n'est PAS une dépendance du package. `CorpusBuilder` accepte un `embedder: Callable[[list[str]], np.ndarray] | None` en paramètre. Les embeddings sont pré-calculés **dans un venv séparé** (hors `kiki-flow-research`) et fournis au builder — ou, si un port MLX de MiniLM est disponible, via une closure MLX directe.
 
 1. **Exact match** sur string normalisée (lowercase, strip punct, collapse whitespace).
 2. **Embedding dedup** : MiniLM embeddings, cosine similarity > **0.92** → drop le plus court des deux.
@@ -235,7 +237,7 @@ Studio actuellement occupé par SFT 35B Opus + distill 35B Opus parallèle (ETA 
 
 | ID | Risque | Impact | Mitigation |
 |----|--------|--------|------------|
-| **R1** | JKO oracle n'expose pas `rho_by_species` séparés | **Bloquant** (KL-par-species infaisable) | Phase 0 smoke test valide API avant Phase 1. Si manquant : patch `oracle()` pour retourner dict `{species: rho}`. **Résolu 2026-04-19** (commit `0bc4798`): les clés réelles dans `FlowState.rho` sont `{"phono:code", "sem:code", "lex:code", "syntax:code"}`. Convention adoptée : short names (`phono/sem/lex/syntax`) comme API publique, canonical names (`<short>:code`) uniquement à la frontière JKO-oracle, via un mapping `SHORT_TO_CANONICAL` centralisé dans `eval/kl_species.py`. |
+| **R1** | JKO oracle n'expose pas `rho_by_species` séparés | **Bloquant** (KL-par-species infaisable) | Phase 0 smoke test valide API avant Phase 1. Si manquant : patch `oracle()` pour retourner dict `{species: rho}`. **Résolu 2026-04-19** (commit `0bc4798`): les clés réelles dans `FlowState.rho` sont `{"phono:code", "sem:code", "lex:code", "syntax:code"}`. Convention adoptée : short names (`phono/sem/lex/syntax`) comme API publique, canonical names (`<short>:code`) uniquement à la frontière JKO-oracle, via un mapping `SHORT_TO_CANONICAL` centralisé dans `eval/kl_species.py`. **Décision complémentaire 2026-04-19** : dedup MiniLM et teacher distillation implémentés sans torch via (B) embedder injectable dans `CorpusBuilder` + (C) port MLX/JAX comme teacher pour `EncoderB_DistilledMiniLM`. Le commit de refactor aligne le code avec cette règle. |
 | **R2** | Biais couverture species dans D (Qwen) | Skew KL-par-species en faveur de sémantique | Après génération, mesurer distribution KL-target-moyen par species. Si déséquilibre > 2× : sur-sampler species sous-représentées depuis B. |
 | **R3** | Flip d'ordre archi entre 10k et 50k (tiny-TF under-trained à 10k) | Mauvaise sélection Top-2 | Top-2 déjà choisi (vs Top-1). Kill-switch additionnel : si écart rang-1 vs rang-3 < 15 %, promouvoir les 3 au scale. |
 | **R4** | Leakage corpus dedup incomplet | Inflation artificielle metrics test | Audit manuel 200 paires (val+test) sur 50k ; si > 2 % quasi-identiques, baisser seuil dedup à 0.88 et re-run. |
