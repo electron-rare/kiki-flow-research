@@ -62,8 +62,12 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]  # avoids uv+py314 UF_HIDDEN .pth issue on macOS
-addopts = "-v --strict-markers --cov=kiki_flow_core --cov-report=term-missing --import-mode=importlib"
-markers = ["slow: tests > 1s", "golden: numerical regression tests"]
+addopts = "-v --strict-markers --cov=kiki_flow_core --cov-report=term-missing --import-mode=importlib -m 'not integration'"
+markers = [
+    "slow: tests > 1s",
+    "golden: numerical regression tests",
+    "integration: full-pipeline integration tests (run explicitly, not in default CI)",
+]
 
 [dependency-groups]
 dev = [
