@@ -1,15 +1,8 @@
 """CLI: consume a JSONL corpus of queries, run JKO oracle, fill a JKOCache.
 
-Integration path (b): JKOStep(ZeroF) with uniform initial FlowState.
-No sentence-transformers, no weights files required. Each query receives an
-independent uniform state_pre; JKOStep.step() produces state_post via one
-JKO iteration (gradient descent on zero free energy = identity-like transport,
-giving a valid (pre, post) pair whose rho_by_species follows the simplex).
-Species keys are the four canonical Levelt-Baddeley labels:
-  {"lex:code", "phono:code", "sem:code", "syntax:code"}
-each with 32-stack resolution, flattened to a 128-dim state vector.
-
-Tests monkeypatch `compute_jko_pair` so unit tests don't invoke the real JKO.
+When --g-jepa is provided, the oracle uses QueryConditionedF (text-conditioned
+dynamics). Otherwise falls back to ZeroF (legacy / test path).
+Tests monkeypatch `compute_jko_pair` so unit tests don't need a real JKO run.
 """
 
 from __future__ import annotations
@@ -19,7 +12,7 @@ import hashlib
 import json
 import logging
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -28,92 +21,114 @@ import numpy as np
 from kiki_flow_core.master_equation import JKOStep, ZeroF
 from kiki_flow_core.state import FlowState
 from kiki_flow_core.track3_deploy.data.jko_cache import JKOCache
+from kiki_flow_core.track3_deploy.query_conditioned_f import (
+    SPECIES_CANONICAL,
+    QueryConditionedF,
+)
+from kiki_flow_core.track3_deploy.state_projection import flatten
+from kiki_flow_core.track3_deploy.train_g_jepa import load_gjepa
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Canonical constants (must match JKOCache and the surrogate training pipeline)
 # ---------------------------------------------------------------------------
-CANONICAL_SPECIES: tuple[str, ...] = ("lex:code", "phono:code", "sem:code", "syntax:code")
+CANONICAL_SPECIES: tuple[str, ...] = SPECIES_CANONICAL
 N_STACKS: int = 32  # per-species resolution
 STATE_DIM: int = len(CANONICAL_SPECIES) * N_STACKS  # 128
 
-# JKO hyper-parameters for the oracle (conservative: many inner steps for accuracy)
+_N_STACKS = 32
+_N_SPECIES = 4
+_P_THETA_DIM = 8
+_EMBED_DIM = 384
+_HASH_SEED_BYTES = 4
+
+# JKO hyper-parameters for the oracle
 _JKO_H: float = 0.1
 _JKO_N_INNER: int = 20
 
 
-def _make_uniform_state(rng: np.random.Generator) -> dict[str, np.ndarray]:
-    """Return a valid uniform-ish initial rho dict for the 4 canonical species."""
+def _seeded_initial_state(query: str) -> FlowState:
+    """Deterministic uniform-ish initial FlowState seeded by sha256 prefix of the query."""
+    seed = int.from_bytes(hashlib.sha256(query.encode("utf-8")).digest()[:_HASH_SEED_BYTES], "big")
+    rng = np.random.default_rng(seed)
     rho: dict[str, np.ndarray] = {}
     for sp in CANONICAL_SPECIES:
-        raw = rng.random(N_STACKS).astype(np.float32)
-        rho[sp] = raw / raw.sum()
-    return rho
-
-
-def _build_jko_step() -> JKOStep:
-    """Construct a JKOStep(ZeroF) for oracle use."""
-    support = np.linspace(0.0, 1.0, N_STACKS, dtype=np.float32)
-    return JKOStep(
-        f_functional=ZeroF(),
-        h=_JKO_H,
-        support=support,
-        n_inner=_JKO_N_INNER,
-        apply_w2_prox=False,  # keep it fast; prox requires POT solve
-    )
-
-
-def compute_jko_pair(query: str) -> dict[str, Any]:  # pragma: no cover - replaced by fake in tests
-    """Run one JKO step for *query* and return a JKOCache-compatible pair.
-
-    The query string is used as a deterministic seed so repeated calls
-    for the same query produce the same pair (oracle idempotence).
-
-    Returns:
-        {
-          "state_pre":  ndarray shape (128,),
-          "state_post": ndarray shape (128,),
-          "rho_by_species": {sp: ndarray shape (32,) for sp in CANONICAL_SPECIES},
-        }
-    """
-    # Deterministic seed from query text so reruns are idempotent.
-    seed = int.from_bytes(hashlib.sha256(query.encode()).digest()[:4], "big")
-    rng = np.random.default_rng(seed)
-
-    # Build an initial uniform FlowState for T3.
-    rho_init = _make_uniform_state(rng)
-    state_pre_obj = FlowState(
-        rho=rho_init,
-        P_theta=np.zeros(8, dtype=np.float32),
-        mu_curr=np.array([1.0], dtype=np.float32),
+        v = rng.random(_N_STACKS).astype(np.float32)
+        rho[sp] = v / v.sum()
+    return FlowState(
+        rho=rho,
+        P_theta=np.zeros(_P_THETA_DIM, dtype=np.float32),
+        mu_curr=np.zeros(1, dtype=np.float32),
         tau=0,
         metadata={"track_id": "T3"},
     )
 
-    # Flatten pre into a 128-dim vector (sorted-key order = CANONICAL_SPECIES order).
-    state_pre = np.concatenate([rho_init[sp] for sp in CANONICAL_SPECIES])
 
-    # One JKO step: ZeroF gradient descent on simplex (fast, deterministic).
-    jko = _build_jko_step()
-    state_post_obj = jko.step(state_pre_obj)
-
-    # Flatten post.
-    state_post = np.concatenate([state_post_obj.rho[sp] for sp in CANONICAL_SPECIES])
-
-    # rho_by_species: canonical species -> post-step distribution (32-dim simplex).
-    rho_by_species = {sp: state_post_obj.rho[sp].copy() for sp in CANONICAL_SPECIES}
-
-    return {
-        "state_pre": state_pre.astype(np.float32),
-        "state_post": state_post.astype(np.float32),
-        "rho_by_species": rho_by_species,
-    }
+def _placeholder_embedder(query: str) -> np.ndarray:
+    """Stub embedder; replaced by callers that own the encoder."""
+    return np.zeros(_EMBED_DIM, dtype=np.float32)
 
 
-# ---------------------------------------------------------------------------
-# Corpus iteration
-# ---------------------------------------------------------------------------
+def _make_pair_computer(
+    g_jepa_path: Path | None = None,
+    embedder: Callable[[str], np.ndarray] | None = None,
+) -> Callable[[str], dict[str, Any]]:
+    """Build a compute_jko_pair closure parametrized by g_JEPA weights + embedder.
+
+    When g_jepa_path is None, falls back to ZeroF (legacy / test path).
+    The returned closure is safe to call concurrently (no shared mutable state).
+    """
+    g_jepa_params = load_gjepa(g_jepa_path) if g_jepa_path is not None else None
+    embed_fn: Callable[[str], np.ndarray] = (
+        embedder if embedder is not None else _placeholder_embedder
+    )
+
+    def _compute(query: str) -> dict[str, Any]:
+        state_pre = _seeded_initial_state(query)
+        if g_jepa_params is None:
+            support = np.linspace(0.0, 1.0, _N_STACKS, dtype=np.float32)
+            step = JKOStep(
+                f_functional=ZeroF(),
+                h=_JKO_H,
+                support=support,
+                n_inner=_JKO_N_INNER,
+                apply_w2_prox=False,
+            )
+        else:
+            emb = embed_fn(query)
+            f_energy = QueryConditionedF(
+                g_jepa_params={k: np.asarray(v) for k, v in g_jepa_params.items()},
+                embedding=emb,
+            )
+            support = np.linspace(0.0, 1.0, _N_STACKS, dtype=np.float32)
+            step = JKOStep(
+                f_functional=f_energy,
+                h=_JKO_H,
+                support=support,
+                n_inner=_JKO_N_INNER,
+                apply_w2_prox=False,
+            )
+        state_post = step.step(state_pre)
+        return {
+            "state_pre": flatten(state_pre),
+            "state_post": flatten(state_post),
+            "rho_by_species": {
+                k: np.asarray(v, dtype=np.float32) for k, v in state_post.rho.items()
+            },
+        }
+
+    return _compute
+
+
+# Module-level default — tests monkeypatch this name to inject a fake.
+# Stored in a mutable container so main() can rebind without a global statement.
+_compute_jko_pair_ref: list[Callable[[str], dict[str, Any]]] = [_make_pair_computer(None)]
+
+
+def compute_jko_pair(query: str) -> dict[str, Any]:  # noqa: D103
+    """Dispatch to the active oracle implementation (ZeroF or QueryConditionedF)."""
+    return _compute_jko_pair_ref[0](query)
 
 
 def _iter_corpus(path: Path) -> Iterator[dict[str, Any]]:
@@ -125,11 +140,6 @@ def _iter_corpus(path: Path) -> Iterator[dict[str, Any]]:
             yield json.loads(stripped)
 
 
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run JKO oracle over a JSONL corpus.")
     parser.add_argument(
@@ -139,11 +149,25 @@ def main(argv: list[str] | None = None) -> int:
         "--cache-dir", type=Path, required=True, help="Directory for JKOCache safetensors files."
     )
     parser.add_argument(
+        "--g-jepa",
+        type=Path,
+        default=None,
+        help=(
+            "Path to pre-trained g_JEPA weights for QueryConditionedF;"
+            " falls back to ZeroF if omitted."
+        ),
+    )
+    parser.add_argument(
         "--limit", type=int, default=0, help="Stop after N new queries (0 = unlimited)."
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
+
+    # Rebind the active computer when --g-jepa is provided (production path).
+    # Tests that don't pass --g-jepa keep their monkeypatched fake untouched.
+    if args.g_jepa is not None:
+        _compute_jko_pair_ref[0] = _make_pair_computer(args.g_jepa)
 
     cache = JKOCache(root=args.cache_dir)
     processed = 0
