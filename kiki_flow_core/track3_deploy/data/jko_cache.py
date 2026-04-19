@@ -7,11 +7,14 @@ Keyed by sha256(query_utf8) so repeated queries don't recompute JKO.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from safetensors.numpy import load_file, save_file
+
+REQUIRED_PAIR_KEYS = frozenset({"state_pre", "state_post", "rho_by_species"})
 
 
 class JKOCache:
@@ -31,14 +34,22 @@ class JKOCache:
         return self.root / f"{self._key(query)}.safetensors"
 
     def put(self, query: str, pair: dict[str, Any]) -> None:
-        """Store a JKO pair. pair = {state_pre, state_post, rho_by_species: dict}."""
+        """Store a JKO pair. pair must contain state_pre, state_post, rho_by_species."""
+        missing = REQUIRED_PAIR_KEYS - pair.keys()
+        if missing:
+            raise ValueError(
+                f"JKOCache.put: pair missing required keys: {sorted(missing)};"
+                f" got {sorted(pair.keys())}"
+            )
         flat: dict[str, np.ndarray] = {
             "state_pre": np.asarray(pair["state_pre"], dtype=np.float32),
             "state_post": np.asarray(pair["state_post"], dtype=np.float32),
         }
         for species, rho in pair["rho_by_species"].items():
             flat[f"rho::{species}"] = np.asarray(rho, dtype=np.float32)
-        save_file(flat, str(self._path(query)))
+        tmp = self._path(query).with_suffix(".safetensors.tmp")
+        save_file(flat, str(tmp))
+        os.replace(tmp, self._path(query))
 
     def get(self, query: str) -> dict[str, Any] | None:
         path = self._path(query)

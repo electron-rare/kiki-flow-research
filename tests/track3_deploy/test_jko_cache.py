@@ -66,3 +66,27 @@ def test_persistence_across_instances(tmp_path) -> None:
     c1.put("persistent", _make_pair())
     c2 = JKOCache(root=tmp_path / "c")
     assert c2.get("persistent") is not None
+
+
+def test_put_rejects_malformed_pair(cache: JKOCache) -> None:
+    """put() must raise ValueError with clear message when pair is missing required keys."""
+    with pytest.raises(ValueError, match="missing required keys"):
+        cache.put(
+            "bad", {"state_pre": np.zeros(128, dtype=np.float32)}
+        )  # missing state_post, rho_by_species
+    # cache should still be empty (no partial file created)
+    assert cache.get("bad") is None
+
+
+def test_put_cleans_up_tmp_on_success(cache: JKOCache, tmp_path) -> None:
+    """After put() succeeds, no .tmp file should linger."""
+    cache.put(
+        "ok",
+        {
+            "state_pre": np.ones(128, dtype=np.float32),
+            "state_post": np.ones(128, dtype=np.float32),
+            "rho_by_species": {"phono:code": np.full(32, 0.25, dtype=np.float32)},
+        },
+    )
+    tmps = list(cache.root.glob("*.tmp"))
+    assert tmps == []
