@@ -1,0 +1,11 @@
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Relation to active inference.}
+Equation~\ref{eq:F} is a faithful instantiation of the variational free energy with an amortized accuracy decoder. The JKO step coincides with the Wasserstein-lifted variational update, which in the convex regime would yield the unique posterior. Our \( F \) is non-convex through the JEPA term; we observe in practice that 10 JKO steps suffice to produce informative \(\rho_\tau \to \rho_{\tau+1}\) pairs without instability.
+
+\paragraph{Limitations.}
+The semantic bin mapping currently uses a stable lemma hash rather than a true WordNet-fr or KMeans-MiniLM clustering --- an absolute identity choice that does not affect the simplex structure but does limit the cognitive interpretability of individual bins. Empirical alignment with human reading-time or fMRI data is out of scope for this workshop submission. We also defer joint self-supervised refinement of \( f_\theta \) and \( g_{\mathrm{JEPA}} \) (phase B) to a companion full paper.
+
+\paragraph{Future work.}
+Phase B will train \( f_\theta \) and \( g_{\mathrm{JEPA}} \) jointly via differentiable JKO with optional contrastive variants of the JEPA loss; that line of work targets ICLR.

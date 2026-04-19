@@ -1,0 +1,6 @@
+\section{Method Overview}
+\label{sec:method-overview}
+
+We model the cognitive state of a French speaker as a tuple \(\rho = (\rho_{\mathrm{phono}}, \rho_{\mathrm{sem}}, \rho_{\mathrm{lex}}, \rho_{\mathrm{syntax}}) \in (\Delta^{32})^4\) --- four discrete probability simplices, one per Levelt-Baddeley species, each ranging over 32 activation stacks. A French query \( q \) is encoded by a text encoder \( f_\theta \) into a 384-dimensional embedding. The objective is a free energy \( F(\rho, q) \) whose gradient drives a JKO step that produces a state \(\rho'\) reflecting how the query reshapes activation across species.
+
+Section~\ref{sec:query-conditioned-f} defines \( F \) and its gradients. Section~\ref{sec:experiments} reports the empirical ablation: three encoder architectures train against \(\rho \to \rho' - \rho\) pairs produced by the JKO oracle on a 50k hybrid French corpus.

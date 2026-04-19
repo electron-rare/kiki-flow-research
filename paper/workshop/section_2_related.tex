@@ -1,0 +1,14 @@
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Active inference and the free-energy principle.}
+Friston's free-energy principle frames perception, learning, and action as the minimization of a variational free energy that decomposes into an accuracy and a complexity term~\cite{friston2010}. Its computational instantiation as variational message passing~\cite{parr2017} and gradient-flow inference~\cite{daCosta2020} provides the theoretical scaffolding for our functional.
+
+\paragraph{JEPA and self-prediction.}
+Joint Embedding Predictive Architecture~\cite{lecun2022} learns representations by predicting target embeddings from context embeddings, with subsequent realizations on images~\cite{assran2023ijepa} and video~\cite{bardes2024vjepa}. Our use of \( g_{\mathrm{JEPA}} \) as the accuracy decoder of an active-inference free energy interprets the predictor as an amortized posterior \( q(s \mid o) \) over psycholinguistic simplex latents.
+
+\paragraph{Wasserstein gradient flows and JKO.}
+The Jordan-Kinderlehrer-Otto scheme~\cite{jko1998} discretizes Wasserstein gradient flows on probability measures, providing the dynamic substrate for our oracle. Recent neural network instantiations~\cite{bunne2022wgf} train surrogates that mimic JKO trajectories, but typically without text conditioning.
+
+\paragraph{French psycholinguistic resources.}
+Our heuristic labeler relies on Lexique.org~\cite{newboucard2004lexique} for word frequency bins, SpaCy-fr~\cite{honnibal2020spacy} for dependency parsing, and the phonemizer toolkit~\cite{phonemizer} for IPA extraction. Levelt's working-memory architecture~\cite{levelt1989speaking} motivates the four-species decomposition.
