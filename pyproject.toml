@@ -17,9 +17,21 @@ dependencies = [
     "prometheus-client>=0.20",
     "scikit-learn>=1.8.0",
     "safetensors>=0.7.0",
+    "optax>=0.2",
+    "flax>=0.8",
+    "virtualenv>=21.2.4",
+    "pytest-cov>=7.1.0",
+    "mypy>=1.20.1",
+    "types-pyyaml>=6.0.12.20260408",
+    "spacy>=3.8.13",
+    "phonemizer>=3.3.0",
 ]
 
 [project.optional-dependencies]
+text-bridge-labeler = [
+    "spacy>=3.7",
+    "phonemizer>=3.2",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
@@ -62,10 +74,17 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]  # avoids uv+py314 UF_HIDDEN .pth issue on macOS
-addopts = "-v --strict-markers --cov=kiki_flow_core --cov-report=term-missing --import-mode=importlib"
-markers = ["slow: tests > 1s", "golden: numerical regression tests"]
+addopts = "-v --strict-markers --cov=kiki_flow_core --cov-report=term-missing --import-mode=importlib -m 'not integration'"
+markers = [
+    "slow: tests > 1s",
+    "golden: numerical regression tests",
+    "integration: full-pipeline integration tests (run explicitly, not in default CI)",
+]
 
 [dependency-groups]
 dev = [
     "datasets>=3.0",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0.3",
+    "virtualenv>=21.2.4",
 ]

@@ -42,7 +42,7 @@
 | `tests/track3_deploy/test_corpus_builder.py` | Dedup exact+embedding, stratification ratios, cross-source dedup, frozen test split |
 | `tests/track3_deploy/test_synth_qwen.py` | Mock tunnel HTTP, parse Qwen response (one query per line), species tagging |
 | `tests/track3_deploy/test_jko_cache.py` | Put/get roundtrip, SHA256 keying, incremental append, miss/hit stats |
-| `tests/track3_deploy/test_jko_oracle_expose.py` | Verify `FlowState.rho` exposes 4 species keyed by `{phono, sem, lex, synt}` with shape `(32,)` each |
+| `tests/track3_deploy/test_jko_oracle_expose.py` | Verify `FlowState.rho` exposes 4 species keyed by `{phono:code, sem:code, lex:code, syntax:code}` with shape `(32,)` each |
 | `tests/track3_deploy/test_encoder_base.py` | ABC contract: forward returns 384-dim, save/load roundtrip |
 | `tests/track3_deploy/test_encoder_hash_mlp.py` | Shape test, determinism (same input → same output), batch forward |
 | `tests/track3_deploy/test_encoder_distilled.py` | MLP forward, distillation loss decreases on toy batch |
@@ -125,7 +125,7 @@ from kiki_flow_core.state import FlowState
 from kiki_flow_core.track3_deploy.state_projection import flatten, unflatten
 
 
-EXPECTED_SPECIES = {"phono", "sem", "lex", "synt"}
+EXPECTED_SPECIES = {"phono:code", "sem:code", "lex:code", "syntax:code"}
 EXPECTED_STACKS_PER_SPECIES = 32
 
 
@@ -161,7 +161,7 @@ def sample_flowstate() -> FlowState:
     """Minimal FlowState with the 4 species, each with 32 stacks, uniform rho."""
     from kiki_flow_core.state import FlowState
     import numpy as np
-    rho = {s: np.ones(32, dtype=np.float32) / 32 for s in ("phono", "sem", "lex", "synt")}
+    rho = {s: np.ones(32, dtype=np.float32) / 32 for s in ("phono:code", "sem:code", "lex:code", "syntax:code")}
     return FlowState(rho=rho)
 ```
 
@@ -229,10 +229,10 @@ def _make_pair() -> dict:
         "state_pre": np.ones(128, dtype=np.float32),
         "state_post": np.ones(128, dtype=np.float32) * 0.9,
         "rho_by_species": {
-            "phono": np.full(32, 0.25, dtype=np.float32),
-            "sem": np.full(32, 0.25, dtype=np.float32),
-            "lex": np.full(32, 0.25, dtype=np.float32),
-            "synt": np.full(32, 0.25, dtype=np.float32),
+            "phono:code": np.full(32, 0.25, dtype=np.float32),
+            "sem:code": np.full(32, 0.25, dtype=np.float32),
+            "lex:code": np.full(32, 0.25, dtype=np.float32),
+            "syntax:code": np.full(32, 0.25, dtype=np.float32),
         },
     }
 
@@ -370,124 +370,66 @@ git commit -m "feat(track3): sha256-indexed jko cache"
 
 ## Task 3: CorpusBuilder (B+C sources, dedup, split)
 
+> **Note 2026-04-19** : refactorisé pour ne pas importer `sentence_transformers` (torch interdit par règle repo). L'embedder est désormais injecté en paramètre (`embedder: Callable[[list[str]], np.ndarray] | None`). Les méthodes `dedup_exact` et `dedup_by_embeddings` sont maintenant publiques et séparées. Le test `test_cross_source_dedup` a été remplacé par `test_dedup_by_embeddings_cross_source` (embeddings craftés, sans ML dep) et `test_dedup_exact_only_when_no_embedder`. Commit : voir Job 6 du sprint no-torch.
+
 **Files:**
 - Create: `kiki_flow_core/track3_deploy/data/corpus_builder.py`
 - Test: `tests/track3_deploy/test_corpus_builder.py`
 
-- [ ] **Step 3.1: Write the failing test**
+- [x] **Step 3.1: Write the failing test** (DONE — new injection-pattern API)
 
-Create `tests/track3_deploy/test_corpus_builder.py`:
+Tests implemented with new API (5 tests total, no sentence-transformers):
 
 ```python
-"""Tests for CorpusBuilder — assemble + dedup + stratified split."""
-from __future__ import annotations
+DEDUP_THRESHOLD = 0.92
 
-from pathlib import Path
+def test_exact_dedup() -> None: ...
 
-import pytest
+def test_dedup_by_embeddings_cross_source() -> None:
+    """With crafted near-duplicate embeddings, lower-priority source is dropped."""
+    builder = CorpusBuilder(dedup_threshold=DEDUP_THRESHOLD)
+    embs = np.array([[1.0, 0.0, 0.0], [0.999, 0.001, 0.0]], dtype=np.float32)
+    out = builder.dedup_by_embeddings([e1, e2], embs)
+    assert len(out) == 1 and out[0].source == "B"
 
-from kiki_flow_core.track3_deploy.data.corpus_builder import (
-    CorpusBuilder,
-    CorpusEntry,
-)
-
-
-def _entries(source: str, species: str, n: int, prefix: str = "q") -> list[CorpusEntry]:
-    return [CorpusEntry(text=f"{prefix}_{source}_{i}", source=source, species=species) for i in range(n)]
-
-
-def test_exact_dedup() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = [CorpusEntry(text="bonjour", source="B", species="phono")] * 3
-    out = builder.dedup(entries)
-    assert len(out) == 1
-
-
-def test_cross_source_dedup() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    e1 = CorpusEntry(text="Bonjour, le monde", source="B", species="phono")
-    e2 = CorpusEntry(text="bonjour le monde", source="D", species="phono")  # near dup
-    out = builder.dedup([e1, e2])
-    assert len(out) == 1
-    assert out[0].source == "B"  # B kept, D dropped (cross-source rule)
-
-
-def test_stratified_split_ratios() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = (
-        _entries("B", "phono", 100)
-        + _entries("C", "sem", 200)
-        + _entries("D", "lex", 150, prefix="qD")
-    )
-    splits = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=0)
-    total = len(splits["train"]) + len(splits["val"]) + len(splits["test"])
-    assert total == 450
-    assert 0.78 <= len(splits["train"]) / total <= 0.82
-    assert 0.08 <= len(splits["val"]) / total <= 0.12
-    assert 0.08 <= len(splits["test"]) / total <= 0.12
-
-
-def test_stratification_preserves_source_species() -> None:
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = _entries("B", "phono", 100) + _entries("C", "sem", 100) + _entries("D", "lex", 100)
-    splits = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=0)
-    # each split must contain all 3 (source, species) tuples
-    for name, s in splits.items():
-        pairs = {(e.source, e.species) for e in s}
-        assert len(pairs) == 3, f"{name} missing strata: {pairs}"
-
-
-def test_frozen_test_split_reproducible() -> None:
-    """Same entries + same seed → identical test split (for corpus_v1_test tag)."""
-    builder = CorpusBuilder(dedup_threshold=0.92)
-    entries = _entries("B", "phono", 100) + _entries("C", "sem", 100)
-    s1 = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=42)
-    s2 = builder.split(entries, ratios=(0.8, 0.1, 0.1), seed=42)
-    assert [e.text for e in s1["test"]] == [e.text for e in s2["test"]]
+def test_dedup_exact_only_when_no_embedder(caplog) -> None:
+    """Without embedder, only exact dedup runs + warning logged."""
+    builder = CorpusBuilder(dedup_threshold=DEDUP_THRESHOLD, embedder=None)
+    ...
+    assert any("no embedder" in msg for msg in caplog.messages)
 ```
 
-- [ ] **Step 3.2: Run test to verify it fails**
+- [x] **Step 3.2: Run test to verify it fails** (DONE)
 
-Run: `uv run python -m pytest tests/track3_deploy/test_corpus_builder.py -v`
-Expected: FAIL — `ModuleNotFoundError`.
+- [x] **Step 3.3: Implement CorpusBuilder** (DONE — embedder injectable, no torch)
 
-- [ ] **Step 3.3: Implement CorpusBuilder**
-
-Create `kiki_flow_core/track3_deploy/data/corpus_builder.py`:
+New public API:
 
 ```python
-"""Assemble, dedup, and stratify-split the hybrid corpus for text-bridge training."""
-from __future__ import annotations
+Embedder = Callable[[list[str]], np.ndarray]  # (n, D) float32, normalized
 
-import hashlib
-import random
-import re
-import unicodedata
-from dataclasses import dataclass
-from typing import Iterable
+class CorpusBuilder:
+    def __init__(self, dedup_threshold: float = 0.92, embedder: Embedder | None = None) -> None: ...
+    def dedup_exact(self, entries: Iterable[CorpusEntry]) -> list[CorpusEntry]: ...
+    def dedup_by_embeddings(self, entries: list[CorpusEntry], embeddings: np.ndarray) -> list[CorpusEntry]: ...
+    def dedup(self, entries: Iterable[CorpusEntry]) -> list[CorpusEntry]: ...  # orchestrates both
+```
 
-import numpy as np
+`_embed()` method removed. No `sentence_transformers` import anywhere.
 
+- [x] **Step 3.4: Run test** — 5 passed (no sentence-transformers needed)
 
-@dataclass(frozen=True)
-class CorpusEntry:
-    text: str
-    source: str  # "B", "C", or "D"
-    species: str  # "phono", "sem", "lex", "synt"
+- [x] **Step 3.5: Commit** — see refactor commit in Job 6
 
+---
 
-_SOURCE_PRIORITY = {"B": 0, "C": 1, "D": 2}  # lower = kept on cross-source dup
+## Task 4: SyntheticGenerator (Qwen tunnel)
 
+**Files:**
+- Create: `kiki_flow_core/track3_deploy/data/synth_qwen.py`
+- Test: `tests/track3_deploy/test_synth_qwen.py`
 
-def _normalize(text: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace, NFKD."""
-    text = unicodedata.normalize("NFKD", text).lower()
-    text = re.sub(r"[^\w\s]", "", text, flags=re.UNICODE)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+- [ ] **Step 4.1: Write the failing test with HTTP mock**
     denom = (np.linalg.norm(a) * np.linalg.norm(b)) + 1e-8
     return float(np.dot(a, b) / denom)
 
@@ -639,7 +581,7 @@ class _MockTransport:
 
 
 def test_prompts_cover_four_species() -> None:
-    assert set(SPECIES_PROMPTS.keys()) == {"phono", "sem", "lex", "synt"}
+    assert set(SPECIES_PROMPTS.keys()) == {"phono", "sem", "lex", "syntax"}
 
 
 def test_parse_response_one_per_line() -> None:
@@ -720,7 +662,7 @@ SPECIES_PROMPTS: dict[str, str] = {
         "registre spécialisé (technique, littéraire, scientifique). "
         "Longueur 8-24 mots. Une query par ligne, sans numérotation."
     ),
-    "synt": (
+    "syntax": (
         "Génère une query en français avec structure syntaxique complexe : "
         "dépendances longues, subordonnées imbriquées, ambiguïtés d'attachement. "
         "Longueur 12-32 mots. Une query par ligne, sans numérotation."
@@ -1033,6 +975,8 @@ git commit -m "feat(track3): hash+mlp encoder (arch C)"
 ---
 
 ## Task 6: EncoderB_DistilledMiniLM
+
+> **Note 2026-04-19** : le teacher n'est PAS `sentence-transformers`/MiniLM direct (torch interdit). Teacher options : (a) port MLX de MiniLM via `mlx-community`, (b) CamemBERT port flax, (c) embeddings pré-calculés en offline venv séparé, sauvés en `.npz` indexé par `sha256(text)`. L'implémentation de T6 commencera par évaluer la disponibilité de (a), puis retombera sur (c) si pas de port convenable. Teacher output dim = 384 (cible inchangée).
 
 **Files:**
 - Create: `kiki_flow_core/track3_deploy/encoders/distilled.py`
@@ -1711,7 +1655,7 @@ def test_kl_zero_when_pred_equals_target() -> None:
     rho = np.full((10, 4, 32), 1.0 / 32, dtype=np.float32)
     result = kl_per_species(rho, rho)
     assert abs(result["total"]) < 1e-6
-    for s in ("phono", "sem", "lex", "synt"):
+    for s in ("phono", "sem", "lex", "syntax"):
         assert abs(result[s]) < 1e-6
 
 
@@ -1772,21 +1716,29 @@ import numpy as np
 
 
 EPS = 1e-8
-SPECIES = ("phono", "sem", "lex", "synt")
+SPECIES_SHORT = ("phono", "sem", "lex", "syntax")
+SPECIES_CANONICAL = ("phono:code", "sem:code", "lex:code", "syntax:code")
+SHORT_TO_CANONICAL = dict(zip(SPECIES_SHORT, SPECIES_CANONICAL))
+# `SPECIES` alias for canonical (what rho_by_species dicts are keyed by)
+SPECIES = SPECIES_CANONICAL
 
 
 def kl_per_species(rho_pred: np.ndarray, rho_target: np.ndarray) -> dict[str, float]:
-    """Shapes (B, 4, 32). Returns {species: KL_mean_over_batch, total: mean_over_species}."""
+    """Shapes (B, 4, 32). Returns {short_name: KL_mean_over_batch, total: mean_over_species}.
+
+    Index i in the (4,) axis corresponds to SPECIES_SHORT[i] and SPECIES_CANONICAL[i].
+    Output keys use SPECIES_SHORT for readability in downstream code and figures.
+    """
     assert rho_pred.shape == rho_target.shape, f"{rho_pred.shape} vs {rho_target.shape}"
     B, S, K = rho_pred.shape
-    assert S == len(SPECIES)
+    assert S == len(SPECIES_SHORT)
     out: dict[str, float] = {}
-    for i, name in enumerate(SPECIES):
+    for i, name in enumerate(SPECIES_SHORT):
         p = rho_pred[:, i, :]
         q = rho_target[:, i, :]
         kl = (q * (np.log(q + EPS) - np.log(p + EPS))).sum(axis=-1).mean()
         out[name] = float(kl)
-    out["total"] = float(np.mean([out[s] for s in SPECIES]))
+    out["total"] = float(np.mean([out[s] for s in SPECIES_SHORT]))
     return out
 
 
@@ -1862,7 +1814,7 @@ def plot_ablation_figure(
     if baseline_v02:
         labels = ["v0.2 (no text)"] + labels
     bottoms = np.zeros(len(labels))
-    colors = {"phono": "#440154", "sem": "#3b528b", "lex": "#21918c", "synt": "#5ec962"}
+    colors = {"phono": "#440154", "sem": "#3b528b", "lex": "#21918c", "syntax": "#5ec962"}
     for species in SPECIES:
         heights = []
         for lab in labels:
@@ -2069,8 +2021,8 @@ def _compute_pair(query: str) -> dict:
     qe = QueryEncoder()
     embedding = qe.encode(query)  # 384-dim
 
-    # Initial state: uniform per species
-    rho0 = {s: np.ones(32, dtype=np.float32) / 32 for s in ("phono", "sem", "lex", "synt")}
+    # Initial state: uniform per species (canonical keys at JKO boundary)
+    rho0 = {s: np.ones(32, dtype=np.float32) / 32 for s in ("phono:code", "sem:code", "lex:code", "syntax:code")}
     state_pre = FlowState(rho=rho0)
 
     # Run one JKO step (existing solver). Replace this import/call with the real one
@@ -2133,7 +2085,7 @@ printf '%s\n' \
   '{"text":"bonjour","source":"B","species":"phono"}' \
   '{"text":"query deux","source":"B","species":"sem"}' \
   '{"text":"test","source":"B","species":"lex"}' \
-  '{"text":"example long","source":"B","species":"synt"}' \
+  '{"text":"example long","source":"B","species":"syntax"}' \
   '{"text":"last one","source":"B","species":"phono"}' \
   > /tmp/smoke_corpus.jsonl
 uv run python -m kiki_flow_core.track3_deploy.jko_oracle_runner \
@@ -2230,7 +2182,7 @@ def train_one_arch(
             spre = np.stack([b["state_pre"] for b in batch])
             spost = np.stack([b["state_post"] for b in batch])
             rho = np.stack([
-                np.stack([b["rho_by_species"][s] for s in ("phono", "sem", "lex", "synt")])
+                np.stack([b["rho_by_species"][s] for s in ("phono:code", "sem:code", "lex:code", "syntax:code")])
                 for b in batch
             ])
             trainer.step(texts, spre, spost, rho)
@@ -2375,7 +2327,7 @@ def test_full_pipeline_under_5_min(tmp_path, monkeypatch) -> None:
     # 1) fake corpus (100 queries, 4 species)
     entries = [
         CorpusEntry(text=f"query {s} {i}", source="B", species=s)
-        for s in ("phono", "sem", "lex", "synt")
+        for s in ("phono", "sem", "lex", "syntax")
         for i in range(25)
     ]
     builder = CorpusBuilder(dedup_threshold=0.99)  # high threshold to skip MiniLM dep
@@ -2387,7 +2339,7 @@ def test_full_pipeline_under_5_min(tmp_path, monkeypatch) -> None:
     for e in entries:
         spre = rng.standard_normal(128, dtype=np.float32)
         spost = spre + rng.standard_normal(128, dtype=np.float32) * 0.05
-        rho = {s: np.abs(rng.standard_normal(32, dtype=np.float32)) for s in ("phono", "sem", "lex", "synt")}
+        rho = {s: np.abs(rng.standard_normal(32, dtype=np.float32)) for s in ("phono:code", "sem:code", "lex:code", "syntax:code")}
         rho = {s: r / r.sum() for s, r in rho.items()}
         cache.put(e.text, {"state_pre": spre, "state_post": spost, "rho_by_species": rho})
 
@@ -2414,7 +2366,7 @@ def test_full_pipeline_under_5_min(tmp_path, monkeypatch) -> None:
             spre = np.stack([b["state_pre"] for b in batch])
             spost = np.stack([b["state_post"] for b in batch])
             rho = np.stack([
-                np.stack([b["rho_by_species"][s] for s in ("phono", "sem", "lex", "synt")])
+                np.stack([b["rho_by_species"][s] for s in ("phono:code", "sem:code", "lex:code", "syntax:code")])
                 for b in batch
             ])
             trainer.step(texts, spre, spost, rho)
@@ -2483,7 +2435,7 @@ def load_psycholinguistic(n: int, seed: int = 0) -> list[CorpusEntry]:
     """Load B source — expects local files under `data/raw/psycho/`."""
     src = Path("data/raw/psycho")
     items = []
-    for species in ("phono", "sem", "lex", "synt"):
+    for species in ("phono", "sem", "lex", "syntax"):
         path = src / f"{species}.txt"
         if not path.exists():
             raise FileNotFoundError(f"missing psycho source: {path}")
@@ -2501,7 +2453,7 @@ def load_generalist(n: int, seed: int = 0) -> list[CorpusEntry]:
         lines = [l.strip() for l in fh if 8 <= len(l.split()) <= 64]
     random.Random(seed).shuffle(lines)
     # Evenly partition to species via round-robin (C entries don't carry species semantics strongly)
-    species_cycle = ("phono", "sem", "lex", "synt")
+    species_cycle = ("phono", "sem", "lex", "syntax")
     return [CorpusEntry(text=l, source="C", species=species_cycle[i % 4]) for i, l in enumerate(lines[:n])]
 
 
@@ -2509,7 +2461,7 @@ def generate_synthetic(n: int) -> list[CorpusEntry]:
     gen = SyntheticGenerator()
     out = []
     per_species = n // 4
-    for species in ("phono", "sem", "lex", "synt"):
+    for species in ("phono", "sem", "lex", "syntax"):
         out.extend(gen.generate_tagged(species, per_species))
     return out
 
@@ -2736,7 +2688,7 @@ scale = json.loads(Path('artifacts/scale50k/summary.json').read_text())
 r10 = {arch: data['test'] for arch, data in pilot['archs'].items()}
 r50 = {arch: data['test'] for arch, data in scale['archs'].items()}
 # baseline v0.2 measured retroactively — fill with placeholder zeros if not available
-baseline = {'phono': 0.0, 'sem': 0.0, 'lex': 0.0, 'synt': 0.0, 'total': 0.0}
+baseline = {'phono': 0.0, 'sem': 0.0, 'lex': 0.0, 'syntax': 0.0, 'total': 0.0}
 plot_ablation_figure(r10, r50, baseline, Path('paper/figures/text_surrogate_ablation'))
 print('figure written')
 "
@@ -2941,7 +2893,7 @@ Adding Task 14.1.5 (in-line below):
 - `JointTrainer` signature `(encoder, lam, lr, seed)` — same across T8 tests, T12 sweep, T13 integration.
 - `JKOCache.put(query, pair)` / `get(query) -> dict | None` — consistent T2 → T11 → T12.
 - `rho_by_species` key — consistent with `FlowState.rho` dict structure confirmed in T1.
-- Species tuple `("phono", "sem", "lex", "synt")` — used consistently. **Note: T1 may reveal the real keys differ** (e.g., `"phonological"`); in that case, Step 1.3 patches everything.
+- Species keys: T1 confirmed the real JKO keys are `("phono:code", "sem:code", "lex:code", "syntax:code")`. Plan adopts **short-name / canonical-name split** — short names (`phono/sem/lex/syntax`) as public API, canonical names (`<short>:code`) only at the JKO-oracle boundary via `SHORT_TO_CANONICAL` mapping in `kl_species.py`.
 
 ---
 

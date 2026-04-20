@@ -1,0 +1,45 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{geometry}
+\usepackage{booktabs}
+\geometry{margin=2.5cm}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=green!40!black,
+  urlcolor=blue!50!black,
+}
+
+\title{QueryConditionedF: Active-Inference Free Energy for Text-Conditioned Wasserstein Flow on Psycholinguistic Simplex Latents}
+
+\author{Anonymous Submission}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Bridging text encoders to Wasserstein gradient flows on bounded latent spaces requires a principled coupling mechanism. We introduce \textsc{QueryConditionedF}, a free-energy functional motivated by the variational free-energy principle (Friston, 2010) and operationalized via a JEPA-style decoder that reconstructs query embeddings from a state on a four-species psycholinguistic simplex (Levelt-Baddeley codes: phonological, semantic, lexical, syntactic; 32 stacks each). Pre-trained offline against heuristic French NLP labels, the decoder furnishes the accuracy term of an active-inference free energy whose gradient drives a JKO step over the simplex. We use this oracle to ablate three text encoder architectures (a hash-MLP fastText analogue, a distilled-MiniLM MLP, and a tiny transformer) on a 50k French hybrid corpus, demonstrating that text-conditioned dynamics enable principled comparison where query-agnostic baselines cannot.
+\end{abstract}
+
+\input{section_1_intro}
+\input{section_2_related}
+\input{section_3_method_overview}
+\input{section_4_method}
+\input{section_5_experiments}
+\input{section_6_discussion}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}
