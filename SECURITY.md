@@ -9,7 +9,7 @@ a best-effort basis.
 
 This policy applies to :
 
-- The code in this repository (`genial-lab/kiki-flow-research`)
+- The code in this repository (`hypneum-lab/kiki-flow-research`)
 - The numerical routines used downstream by `dream-of-kiki`,
   `micro-kiki`, and `nerve-wml`
 - The documentation in `docs/`
@@ -30,7 +30,7 @@ please report it **privately** via one of these channels :
 
 1. Email : `clement@saillant.cc` — subject starting with `[SECURITY]`
 2. GitHub Private Vulnerability Reporting :
-   https://github.com/genial-lab/kiki-flow-research/security/advisories/new
+   https://github.com/hypneum-lab/kiki-flow-research/security/advisories/new
 
 Please include :
 

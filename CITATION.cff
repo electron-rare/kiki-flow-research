@@ -13,15 +13,14 @@ abstract: >
   semantic levels.
 type: software
 authors:
-  - name: "genial-lab contributors"
   - family-names: Saillant
     given-names: Clément
     email: clement@saillant.cc
     affiliation: "L'Electron Rare, Grandris, France"
-repository-code: "https://github.com/genial-lab/kiki-flow-research"
-url: "https://github.com/genial-lab/kiki-flow-research"
+repository-code: "https://github.com/hypneum-lab/kiki-flow-research"
+url: "https://github.com/hypneum-lab/kiki-flow-research"
 license: MIT
-license-url: "https://github.com/genial-lab/kiki-flow-research/blob/main/LICENSE"
+license-url: "https://github.com/hypneum-lab/kiki-flow-research/blob/main/LICENSE"
 keywords:
   - Wasserstein gradient flow
   - continual learning
@@ -47,5 +46,5 @@ preferred-citation:
       email: clement@saillant.cc
       affiliation: "L'Electron Rare, Grandris, France"
   year: 2026
-  url: "https://github.com/genial-lab/dream-of-kiki"
+  url: "https://github.com/hypneum-lab/dream-of-kiki"
   notes: "Paper 1 draft v0.2. MIT code + CC-BY-4.0 docs. OSF pre-registration DOI 10.17605/OSF.IO/Q6JYN. arXiv preprint forthcoming."
