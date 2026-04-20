@@ -1416,7 +1416,7 @@ uv run python -m kiki_flow_core.track3_deploy.train_g_jepa \
 
 Skip if pilot pre-training is deemed sufficient. Decide by sanity check (does g_JEPA MSE on held-out 50k queries match pilot MSE?).
 
-- [ ] **Step 23.5: Rsync delta + run JKO oracle on new 40k**
+- [x] **Step 23.5: Rsync delta + run JKO oracle on new 40k**
 
 ```bash
 rsync -av data/processed/scale50k/ studio:kiki-flow-research/data/processed/scale50k/
@@ -1432,7 +1432,7 @@ uv run python -m kiki_flow_core.track3_deploy.jko_oracle_runner \
 
 The cache skips 10k already computed; ~40k new entries processed.
 
-- [ ] **Step 23.6: Sync + run scale sweep on Top-k**
+- [x] **Step 23.6: Sync + run scale sweep on Top-k**
 
 Retrieve Top-k list from Task 22.7. Example if Top-2 = `["B_distilled","C_hash_mlp"]`:
 
@@ -1449,7 +1449,7 @@ uv run python -m kiki_flow_core.track3_deploy.sweep \
   --seed 0
 ```
 
-- [ ] **Step 23.7: Pull winner, export to NumPy, commit weights**
+- [x] **Step 23.7: Pull winner, export to NumPy, commit weights**
 
 ```bash
 rsync -av kxkm-ai:kiki-flow-research/artifacts/scale50k/ artifacts/scale50k/
