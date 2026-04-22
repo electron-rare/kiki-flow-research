@@ -1,6 +1,77 @@
 \section{Method Overview}
 \label{sec:method-overview}
 
-We model the cognitive state of a French speaker as a tuple \(\rho = (\rho_{\mathrm{phono}}, \rho_{\mathrm{sem}}, \rho_{\mathrm{lex}}, \rho_{\mathrm{syntax}}) \in (\Delta^{32})^4\) --- four discrete probability simplices, one per Levelt-Baddeley species, each ranging over 32 activation stacks. A French query \( q \) is encoded by a text encoder \( f_\theta \) into a 384-dimensional embedding. The objective is a free energy \( F(\rho, q) \) whose gradient drives a JKO step that produces a state \(\rho'\) reflecting how the query reshapes activation across species.
+We model the cognitive state of a French speaker as a tuple
+$\rho = (\rho_{\mathrm{phono}}, \rho_{\mathrm{sem}},
+\rho_{\mathrm{lex}}, \rho_{\mathrm{syntax}}) \in (\Delta^{32})^4$
+--- four discrete probability simplices, one per Levelt-Baddeley
+species, each ranging over 32 activation stacks. A French query
+$q$ is encoded by a text encoder $f_\theta$ into a 384-dimensional
+embedding. The objective is a free energy $F(\rho, q)$ whose
+gradient drives a JKO step that produces a state $\rho'$
+reflecting how the query reshapes activation across species.
 
-Section~\ref{sec:query-conditioned-f} defines \( F \) and its gradients. Section~\ref{sec:experiments} reports the empirical ablation: three encoder architectures train against \(\rho \to \rho' - \rho\) pairs produced by the JKO oracle on a 50k hybrid French corpus.
+\paragraph{Pipeline.} The coupling proceeds in five stages
+(\cref{fig:pipeline}). (1)~A query $q$ is passed through
+$f_\theta$, producing a 384-d embedding
+$q_{\mathrm{emb}} \in \mathbb{R}^{384}$. (2)~The current state
+$\rho_\tau \in (\Delta^{32})^4$ is flattened to a 128-d vector
+$\rho_\tau^{\mathrm{flat}} \in \Delta^{128}$ and decoded by the
+JEPA predictor $g_{\mathrm{JEPA}}$ to produce a reconstruction
+$\hat{q} = g_{\mathrm{JEPA}}(\rho_\tau^{\mathrm{flat}})$.
+(3)~The accuracy term
+$\|q_{\mathrm{emb}} - \hat{q}\|^2$ is differentiated via JAX
+autodiff; the complexity and coupling terms are analytical.
+(4)~The gradient $\nabla F(\rho_\tau, q)$ is combined with the
+Wasserstein proximal operator to produce one JKO step (see
+Section~\ref{sec:query-conditioned-f}). (5)~The updated state
+$\rho_{\tau+1}$ is projected back onto the simplex via
+\texttt{softplus}-normalize.
+
+\begin{figure}[t]
+  \centering
+  \small
+  \begin{tabular}{c}
+    \fbox{\parbox{0.9\linewidth}{\centering
+      \texttt{query $q$} \quad $\Longrightarrow$ \quad
+      $f_\theta$ \quad $\Longrightarrow$ \quad
+      $q_{\mathrm{emb}} \in \mathbb{R}^{384}$ \\[1ex]
+      $\rho_\tau \in (\Delta^{32})^4$ \quad $\Longrightarrow$ \quad
+      \texttt{flatten} \quad $\Longrightarrow$ \quad
+      $g_{\mathrm{JEPA}}$ \quad $\Longrightarrow$ \quad $\hat{q}$ \\[1ex]
+      \bigskip
+      $\nabla F(\rho_\tau, q) \;=\;
+       \nabla D_{\mathrm{KL}} \;+\;
+       \nabla \tfrac{1}{2\sigma^2}\|q_{\mathrm{emb}} - \hat{q}\|^2 \;+\;
+       \nabla \lambda_J \sum J_{st}\langle\rho_s, \rho_t\rangle$ \\[1ex]
+      $\Downarrow$ \quad \texttt{JKO step + simplex-project} \\[1ex]
+      $\rho_{\tau+1} \in (\Delta^{32})^4$
+    }}
+  \end{tabular}
+  \caption{\textsc{QueryConditionedF} pipeline. Analytical
+    gradients (KL, species coupling) compose with autodiff
+    through the JEPA accuracy term; the JKO step projects the
+    update back onto the product simplex.}
+  \label{fig:pipeline}
+\end{figure}
+
+\paragraph{Design choices.} Three are load-bearing. First,
+\emph{32 bins per species} is a compromise between representational
+resolution (32 preserves enough granularity for the lemma-hash
+semantic mapping of \S\ref{sec:labeler}) and numerical stability
+of the JKO step (gradients through very-high-$K$ simplices require
+log-space normalization with attendant noise floors). Second,
+\emph{four species} follow the Levelt-Baddeley decomposition
+\citep{levelt1989speaking, baddeley1974} verbatim; our functional
+does not rely on the specific count --- any finite species number
+with pre-defined priors would fit identically. Third, \emph{JKO
+over Euler} is motivated by the Wasserstein geometry of the
+simplex: the squared Euclidean gradient step would systematically
+shrink entropy and collapse onto the prior, whereas JKO respects
+the geometry of the underlying probability measure.
+
+Section~\ref{sec:query-conditioned-f} defines $F$ and its
+gradients formally. Section~\ref{sec:experiments} reports the
+empirical ablation: three encoder architectures train against
+$\rho \to \rho' - \rho$ pairs produced by the JKO oracle on a
+50\,k hybrid French corpus.

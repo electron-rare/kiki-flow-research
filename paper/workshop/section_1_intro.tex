@@ -1,10 +1,86 @@
 \section{Introduction}
 \label{sec:intro}
 
-Text encoders that produce dense embeddings have become a foundational primitive in modern machine learning, yet the question of how an embedding should \emph{act on} a structured cognitive state has received less attention. We address one instance of this problem: coupling a 384-dimensional French sentence embedding to a Wasserstein gradient flow over a four-species psycholinguistic simplex inspired by the Levelt-Baddeley working-memory model.
+Text encoders that produce dense embeddings have become a foundational
+primitive in modern machine learning, yet the question of how an
+embedding should \emph{act on} a structured cognitive state has
+received less attention. We address one instance of this problem:
+coupling a 384-dimensional French sentence embedding to a Wasserstein
+gradient flow over a four-species psycholinguistic simplex inspired
+by the Levelt-Baddeley working-memory model.
 
-Two existing free-energy functionals in our codebase, \texttt{T1FreeEnergy} and \texttt{T2FreeEnergy}, are query-agnostic. Their dynamics depend only on the current state, the species coupling matrix, and a fixed prior. Using either as the oracle for a text-conditioned bridge surrogate produces (state\_pre, state\_post) pairs whose post-state is independent of the query, defeating the purpose of training a text-aware downstream model.
+\paragraph{Positioning.} Three adjacent lines of work approach
+text-to-latent coupling from different angles. Classical JEPA
+\citep{lecun2022} trains a context encoder to predict target
+embeddings in a shared representation space but makes no structural
+commitment about that space. Amortized variational inference with
+continuous normalizing flows (e.g., \citealp{chen2018neural}) gives
+principled dynamics but operates on unconstrained $\mathbb{R}^d$
+rather than on a bounded simplex. Active-inference
+\citep{friston2010,parr2017} provides the right variational
+scaffold --- accuracy plus complexity --- but its computational
+instantiations typically use Gaussian or factorized categorical
+posteriors, not probability-simplex latents driven by an
+external query. None of the three, to our knowledge, simultaneously
+(a) bounds the latent to a probability simplex, (b) conditions
+the dynamics on an external text query, and (c) preserves the
+active-inference free-energy decomposition. \textsc{QueryConditionedF}
+is the first functional we are aware of that does all three.
 
-We propose \textsc{QueryConditionedF}, a third free-energy subclass whose accuracy term is parameterized by a JEPA-style decoder \( g_{\mathrm{JEPA}}: \Delta^{128} \to \mathbb{R}^{384} \) that reconstructs the query embedding from the simplex state. The complexity term is the standard per-species KL to a Levelt-Baddeley prior, and a lightweight species-coupling term carries over the inter-code interactions of \texttt{T2FreeEnergy}. The decoder is pre-trained offline against heuristic labels obtained from a deterministic French NLP pipeline (SpaCy-fr, phonemizer, Lexique.org) --- sidestepping the need for ground-truth species annotations.
+\paragraph{The query-agnostic baseline problem.} Two existing
+free-energy functionals in our codebase, \texttt{T1FreeEnergy} and
+\texttt{T2FreeEnergy}, are query-agnostic. Their dynamics depend
+only on the current state, the species coupling matrix, and a fixed
+prior. Using either as the oracle for a text-conditioned bridge
+surrogate produces \texttt{(state\_pre, state\_post)} pairs whose
+post-state is independent of the query, defeating the purpose of
+training a text-aware downstream model. \textsc{QueryConditionedF}
+is the minimal modification that makes the oracle \emph{react}
+to the query.
 
-Our contributions are: (i) a principled formulation of \textsc{QueryConditionedF} with analytical gradients for the complexity and coupling terms and JAX autodiff for the JEPA term; (ii) a reproducible heuristic French labeler producing 32-simplex targets per species; (iii) an empirical ablation of three encoder architectures over a 50k hybrid French corpus, demonstrating that text conditioning shifts the post-state distribution in a predictable, measurable way. A companion full paper (in preparation) extends this design to joint self-supervised training of the encoder and decoder via differentiable JKO.
+\paragraph{Why this is non-trivial.} Three difficulties arise.
+First, the JEPA accuracy term is non-convex in $\rho$, so the JKO
+step is no longer guaranteed to converge to a unique minimum, and
+we observe empirically that step-size and number of steps both
+matter. Second, the state is a product of four 32-bin simplices
+rather than a flat $\mathbb{R}^d$ --- the gradient must be projected
+back onto the simplex after each update, which we achieve via a
+softplus-normalize scheme detailed in \S\ref{sec:query-conditioned-f}.
+Third, the decoder $g_{\mathrm{JEPA}}$ requires pre-training, yet no
+ground-truth species labels exist for French text; we handle this
+cold-start via a deterministic heuristic labeler built from
+SpaCy-fr, Lexique.org, and \texttt{phonemizer}.
+
+\paragraph{Proposal.} We propose \textsc{QueryConditionedF}, a
+third free-energy subclass whose accuracy term is parameterized
+by a JEPA-style decoder
+$g_{\mathrm{JEPA}}: \Delta^{128} \to \mathbb{R}^{384}$ that
+reconstructs the query embedding from the simplex state.
+The complexity term is the standard per-species KL to a
+Levelt-Baddeley prior, and a lightweight species-coupling term
+carries over the inter-code interactions of \texttt{T2FreeEnergy}.
+The decoder is pre-trained offline against heuristic labels
+obtained from a deterministic French NLP pipeline (SpaCy-fr,
+phonemizer, Lexique.org) --- sidestepping the need for ground-truth
+species annotations.
+
+\paragraph{Contributions.} (i) A principled formulation of
+\textsc{QueryConditionedF} with analytical gradients for the
+complexity and coupling terms and JAX autodiff for the JEPA term;
+(ii) a reproducible heuristic French labeler producing 32-simplex
+targets per species; (iii) an empirical ablation of three encoder
+architectures over a 50k hybrid French corpus with an explicit
+R3 kill-switch (15\% gap threshold) between pilot and scale phases,
+demonstrating that text conditioning shifts the post-state
+distribution in a predictable, measurable way. A companion full
+paper (in preparation) extends this design to joint self-supervised
+training of the encoder and decoder via differentiable JKO and
+reports on a biological-bridge extension using the Nerve Protocol
+\citep{saillant2026nervewml}.
+
+\paragraph{Reproducibility and pre-registration.} All results are
+reproducible from the tagged repository
+(\url{https://github.com/hypneum-lab/kiki-flow-research}), with
+SHA256-keyed \texttt{.safetensors} caches for every oracle run.
+The R3 kill-switch threshold (15\% relative gap rank-1$\to$rank-3)
+was fixed before the pilot and is reported verbatim in \S\ref{sec:experiments}.

@@ -3,49 +3,126 @@
 
 \subsection{Free-energy functional}
 
-For state \(\rho\) and query embedding \(q \in \mathbb{R}^{384}\):
-
+For state $\rho$ and query embedding $q \in \mathbb{R}^{384}$:
 \begin{equation}
 F(\rho, q) = \underbrace{\sum_{s} D_{\mathrm{KL}}(\rho_s \,\|\, \pi_{\mathrm{prior},s})}_{\mathrm{complexity}}
          + \underbrace{\tfrac{1}{2\sigma^2} \| q - g_{\mathrm{JEPA}}(\rho) \|^2}_{\mathrm{accuracy\;(JEPA)}}
-         + \underbrace{\lambda_J \sum_{s,t} J_{st} \langle \rho_s, \rho_t \rangle}_{\mathrm{coupling}}
+         + \underbrace{\lambda_J \sum_{s,t} J_{s,t} \langle \rho_s, \rho_t \rangle}_{\mathrm{coupling}}
 \label{eq:F}
 \end{equation}
 
-The decoder \( g_{\mathrm{JEPA}} : \Delta^{128} \to \mathbb{R}^{384} \) is a two-layer MLP (128 \(\to\) 256 \(\to\) 384, GELU activations) with parameters pre-trained as described below. The prior \(\pi_{\mathrm{prior}, s}\) defaults to the uniform simplex; in our experiments we keep \(\sigma^2 = 1\) and \(\lambda_J = 0.1\). The species coupling matrix \(J \in \mathbb{R}^{4 \times 4}\) is taken from the Levelt-Baddeley specification used by \texttt{T2FreeEnergy} in our codebase.
+The decoder $g_{\mathrm{JEPA}} : \Delta^{128} \to \mathbb{R}^{384}$
+is a two-layer MLP (128 $\to$ 256 $\to$ 384, GELU activations)
+with parameters pre-trained as described below. The prior
+$\pi_{\mathrm{prior}, s}$ defaults to the uniform simplex; in our
+experiments we keep $\sigma^2 = 1$ and $\lambda_J = 0.1$. The
+species coupling matrix $J \in \mathbb{R}^{4 \times 4}$ is taken
+from the Levelt-Baddeley specification used by
+\texttt{T2FreeEnergy} in our codebase.
+
+\paragraph{Choice of $\sigma^2$ and $\lambda_J$.}
+The default $\sigma^2 = 1$ normalizes the JEPA accuracy to the
+same scale as the KL complexity (both in log-units, given our
+embedding normalization). $\lambda_J = 0.1$ was fixed by a
+coarse pilot (three values $\{0.01, 0.1, 1.0\}$ on a 1\,k-query
+subset): $0.01$ underweights the species coupling, producing
+species drift decoupled from Levelt-Baddeley expectations;
+$1.0$ over-regularizes, collapsing the state toward the
+coupling null-space. We do not claim $0.1$ is optimal;
+sensitivity is deferred to the companion full paper, where it
+is tested as a free hyperparameter under joint
+$f_\theta$/$g_{\mathrm{JEPA}}$ training.
 
 \subsection{Gradients}
 
-The complexity term yields \( \partial_{\rho_s} = \log(\rho_s / \pi_{\mathrm{prior},s}) + 1 \) and the coupling term yields \( \partial_{\rho_s} = 2 \lambda_J \sum_{t} J_{s,t} \rho_t \), both analytical. The JEPA term is differentiated via JAX autodiff.
-
-One JKO step minimizes \( F(\rho, q) + \tfrac{1}{2h} W_2^2(\rho, \rho_\tau) \), the Wasserstein formulation of variational inference. As \(\tau \to \tau+1\) the flow approximates the active-inference posterior \( q^\star(s \mid q) \).
+The complexity term yields
+$\partial_{\rho_s} = \log(\rho_s / \pi_{\mathrm{prior},s}) + 1$
+and the coupling term yields
+$\partial_{\rho_s} = 2 \lambda_J \sum_{t} J_{s,t} \rho_t$,
+both analytical. The JEPA term is differentiated via JAX autodiff.
+One JKO step minimizes
+$F(\rho, q) + \tfrac{1}{2h} W_2^2(\rho, \rho_\tau)$,
+the Wasserstein formulation of variational inference. As
+$\tau \to \tau+1$ the flow approximates the active-inference
+posterior $q^\star(s \mid q)$.
 
 \subsection{Heuristic labeler (phase A)}
 \label{sec:labeler}
 
-To pre-train \( g_{\mathrm{JEPA}} \) without ground-truth species labels, we build a deterministic French NLP labeler that maps each query \( q \) to a target \(\pi^{\mathrm{lbl}} \in (\Delta^{32})^4\):
+To pre-train $g_{\mathrm{JEPA}}$ without ground-truth species
+labels, we build a deterministic French NLP labeler that maps each
+query $q$ to a target
+$\pi^{\mathrm{lbl}} \in (\Delta^{32})^4$
+(\cref{alg:labeler}):
 
 \begin{itemize}
-    \item \textbf{phono}: 32 phonetic classes (4 broad groups \(\times\) 8 finer subclasses) extracted via the espeak-ng backend of \texttt{phonemizer}.
-    \item \textbf{sem}: 32 categorical semantic bins, currently keyed via a stable lemma hash (a placeholder for a WordNet-fr or KMeans-MiniLM mapping; this affects only the absolute identity of bins, not the simplex structure).
-    \item \textbf{lex}: 32 log-frequency bins computed from Lexique.org 3.83~\cite{newboucard2004lexique}.
-    \item \textbf{syntax}: 32 Universal Dependency labels, counted from a SpaCy-fr dependency parse.
+    \item \textbf{phono}: 32 phonetic classes (4 broad groups
+        $\times$ 8 finer subclasses) extracted via the
+        \texttt{espeak-ng} backend of \texttt{phonemizer}.
+    \item \textbf{sem}: 32 categorical semantic bins, currently
+        keyed via a stable lemma hash (a placeholder for a
+        WordNet-fr or KMeans-MiniLM mapping; this affects only
+        the absolute identity of bins, not the simplex
+        structure).
+    \item \textbf{lex}: 32 log-frequency bins computed from
+        Lexique.org 3.83~\citep{newboucard2004lexique}.
+    \item \textbf{syntax}: 32 Universal Dependency labels,
+        counted from a SpaCy-fr dependency
+        parse~\citep{honnibal2020spacy}.
 \end{itemize}
 
-Phase A then minimizes \( \| f_\theta(q) - g_{\mathrm{JEPA}}(\mathrm{flatten}(\pi^{\mathrm{lbl}})) \|^2 \) via Adam-W on \(\sim\)5--10k French queries; \( f_\theta \) is held fixed during phase A and selected by the encoder ablation reported in Section~\ref{sec:experiments}.
+\begin{algorithm}[ht]
+  \caption{Heuristic labeler (phase A target)}
+  \label{alg:labeler}
+  \small
+  \begin{tabbing}
+    ~~~\=\quad\=\quad\=\quad\kill
+    \textbf{Input:} query string $q$ \\
+    \textbf{Output:} target distribution
+        $\pi^{\mathrm{lbl}} \in (\Delta^{32})^4$ \\[1ex]
+    \> $\pi_{\mathrm{phono}} \leftarrow$ normalize(count\_phoneme\_classes(phonemizer($q$))) \\
+    \> $\pi_{\mathrm{sem}}   \leftarrow$ one\_hot(stable\_hash(spacy\_lemmas($q$)) mod 32) \\
+    \> $\pi_{\mathrm{lex}}   \leftarrow$ normalize(count\_freq\_bins(lexique\_lookup(tokens($q$)), 32)) \\
+    \> $\pi_{\mathrm{syntax}} \leftarrow$ normalize(count\_ud\_labels(spacy\_parse($q$), 32)) \\
+    \> \textbf{return} $(\pi_{\mathrm{phono}}, \pi_{\mathrm{sem}}, \pi_{\mathrm{lex}}, \pi_{\mathrm{syntax}})$
+  \end{tabbing}
+\end{algorithm}
+
+Phase A then minimizes
+$\| f_\theta(q) - g_{\mathrm{JEPA}}(\mathrm{flatten}(\pi^{\mathrm{lbl}})) \|^2$
+via Adam-W on $\sim$5--10\,k French queries; $f_\theta$ is held
+fixed during phase A and selected by the encoder ablation reported
+in Section~\ref{sec:experiments}.
+
+\paragraph{Why hash-MLP wins despite a smaller parameter count.}
+The Section~\ref{sec:experiments} ablation finds that a
+$0.65$\,M-parameter hash-MLP encoder (architecture C) outperforms a
+$2.44$\,M-parameter distilled-MiniLM analogue (B) on the pilot and
+scale phases. We hypothesize this is not a defect of the larger
+model but an architectural match: the 4 $\times$ 32 simplex target
+has limited effective capacity (a 128-d simplex is isomorphic to a
+$127$-d manifold in $\mathbb{R}^{128}$), and the hash-MLP produces
+representations with sparsity structure that aligns better with the
+per-species histograms of Algorithm~\ref{alg:labeler}. The
+MiniLM analogue embeds semantic content that is partially wasted at
+the simplex resolution. A companion full paper (in preparation)
+tests this hypothesis directly by ablating the
+$g_{\mathrm{JEPA}}$ hidden dimension against each encoder family.
 
 \subsection{Ablation}
 \label{sec:ablation}
 
-Figure~\ref{fig:ablation} reports the per-species KL on the FR hybrid
-corpus at 10k (pilot) and 50k (scale) for three text encoders
-(\(\mathrm{B}_{\text{distilled}}\), \(\mathrm{C}_{\text{hash-mlp}}\),
-\(\mathrm{D}_{\text{tiny-tf}}\)). Figure~\ref{fig:scaling} plots the total
-test KL trajectory \(10\text{k} \to 50\text{k}\) per architecture.
-\(\mathrm{C}_{\text{hash-mlp}}\) retains rank-1 at both scales and the
-gap to rank-2 \(\mathrm{B}_{\text{distilled}}\) collapses from
-\(\approx 3\%\) at 10k to \(\approx 0.3\%\) at 50k, confirming the
-R3 kill-switch promotion to Top-2.
+Figure~\ref{fig:ablation} reports the per-species KL on the FR
+hybrid corpus at 10\,k (pilot) and 50\,k (scale) for three text
+encoders ($\mathrm{B}_{\text{distilled}}$,
+$\mathrm{C}_{\text{hash-mlp}}$,
+$\mathrm{D}_{\text{tiny-tf}}$).
+Figure~\ref{fig:scaling} plots the total test KL trajectory
+$10\text{\,k} \to 50\text{\,k}$ per architecture.
+$\mathrm{C}_{\text{hash-mlp}}$ retains rank-1 at both scales and
+the gap to rank-2 $\mathrm{B}_{\text{distilled}}$ collapses from
+$\approx 3\,\%$ at 10\,k to $\approx 0.3\,\%$ at 50\,k, confirming
+the R3 kill-switch promotion to Top-2.
 
 \begin{figure}[t]
   \centering
@@ -57,7 +134,7 @@ R3 kill-switch promotion to Top-2.
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.75\linewidth]{figures/scaling_curves.pdf}
-  \caption{Total test KL scaling \(10\text{k} \to 50\text{k}\) per
-    architecture.}
+  \caption{Total test KL scaling $10\text{\,k} \to 50\text{\,k}$
+    per architecture.}
   \label{fig:scaling}
 \end{figure}

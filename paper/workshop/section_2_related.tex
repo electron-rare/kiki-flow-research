@@ -2,13 +2,83 @@
 \label{sec:related}
 
 \paragraph{Active inference and the free-energy principle.}
-Friston's free-energy principle frames perception, learning, and action as the minimization of a variational free energy that decomposes into an accuracy and a complexity term~\cite{friston2010}. Its computational instantiation as variational message passing~\cite{parr2017} and gradient-flow inference~\cite{daCosta2020} provides the theoretical scaffolding for our functional.
+Friston's free-energy principle frames perception, learning, and
+action as the minimization of a variational free energy that
+decomposes into an accuracy term (how well internal states predict
+observations) and a complexity term (how far the posterior drifts
+from the prior)~\citep{friston2010}. Its computational instantiation
+as variational message passing~\citep{parr2017} and gradient-flow
+inference~\citep{daCosta2020} provides the theoretical scaffolding
+for our functional. Crucially, classical active-inference
+implementations use Gaussian or factorized categorical posteriors,
+both of which admit closed-form KL divergences. Our choice of a
+\emph{product of simplices} $\rho \in (\Delta^{32})^4$ preserves the
+closed-form complexity term per species but forces numerical
+handling of the accuracy term, which we discuss in
+\S\ref{sec:query-conditioned-f}.
 
 \paragraph{JEPA and self-prediction.}
-Joint Embedding Predictive Architecture~\cite{lecun2022} learns representations by predicting target embeddings from context embeddings, with subsequent realizations on images~\cite{assran2023ijepa} and video~\cite{bardes2024vjepa}. Our use of \( g_{\mathrm{JEPA}} \) as the accuracy decoder of an active-inference free energy interprets the predictor as an amortized posterior \( q(s \mid o) \) over psycholinguistic simplex latents.
+Joint Embedding Predictive Architecture~\citep{lecun2022} learns
+representations by predicting target embeddings from context
+embeddings, with subsequent realizations on images
+\citep{assran2023ijepa} and video~\citep{bardes2024vjepa}. Our use of
+$g_{\mathrm{JEPA}}$ as the accuracy decoder of an active-inference
+free energy interprets the predictor as an amortized posterior
+$q(s \mid o)$ over psycholinguistic simplex latents. In contrast to
+standard JEPA, we (i) fix the target domain (the text embedding
+manifold) rather than learning it jointly, and (ii) force the
+context ($\rho$) onto a structured simplex. This restriction is what
+makes the free-energy framing meaningful: the KL complexity term
+would be ill-defined on an unconstrained embedding.
 
 \paragraph{Wasserstein gradient flows and JKO.}
-The Jordan-Kinderlehrer-Otto scheme~\cite{jko1998} discretizes Wasserstein gradient flows on probability measures, providing the dynamic substrate for our oracle. Recent neural network instantiations~\cite{bunne2022wgf} train surrogates that mimic JKO trajectories, but typically without text conditioning.
+The Jordan-Kinderlehrer-Otto scheme~\citep{jko1998} discretizes
+Wasserstein gradient flows on probability measures, providing the
+dynamic substrate for our oracle. Recent neural-network
+instantiations~\citep{bunne2022wgf} train surrogates that mimic JKO
+trajectories, but typically without text conditioning. Adjacent work
+on text-to-distribution bridging \citep{rezende2015variational} uses
+affine flows parameterized by text, but on free-support densities,
+not on bounded simplex latents. To the best of our knowledge,
+\textsc{QueryConditionedF} is the first JKO formulation that
+(a) couples to a text encoder via a JEPA-style accuracy decoder,
+(b) operates on a product-of-simplices latent, and (c) preserves the
+full Friston accuracy/complexity decomposition.
+
+\paragraph{Text encoders on structured latents.}
+Most work on text-to-latent mapping targets an unconstrained
+embedding space (e.g., sentence-BERT families~\citep{reimers2019sbert})
+or discrete code spaces via VQ-VAE~\citep{vandenoord2017neural}.
+Two notable exceptions are softmax-normalized topic-model bridges
+(LDA-style distributions over a simplex) and categorical latents in
+dialogue modeling, but neither frames the mapping as an active-inference
+step. Our work sits in the intersection: a text encoder whose output
+drives a dynamical process on a simplex, where the dynamics are
+justified by the free-energy principle rather than by likelihood
+maximization.
 
 \paragraph{French psycholinguistic resources.}
-Our heuristic labeler relies on Lexique.org~\cite{newboucard2004lexique} for word frequency bins, SpaCy-fr~\cite{honnibal2020spacy} for dependency parsing, and the phonemizer toolkit~\cite{phonemizer} for IPA extraction. Levelt's working-memory architecture~\cite{levelt1989speaking} motivates the four-species decomposition.
+Our heuristic labeler relies on Lexique.org~\citep{newboucard2004lexique}
+for word frequency bins, SpaCy-fr~\citep{honnibal2020spacy} for
+dependency parsing, and the \texttt{phonemizer}
+toolkit~\citep{phonemizer} for IPA extraction.
+Levelt's working-memory architecture~\citep{levelt1989speaking}
+motivates the four-species decomposition (phono, sem, lex,
+syntax), which Baddeley and Hitch's multi-component working memory
+model \citep{baddeley1974} reinforces by treating phonological and
+semantic stores as architecturally separable. We inherit the
+four-way split from the codebase but emphasize that the
+\textsc{QueryConditionedF} machinery is not tied to this particular
+decomposition --- any finite species count with pre-defined priors
+would fit the same functional.
+
+\paragraph{Substrate-agnostic bridges.}
+Our broader research programme treats cross-modal coupling as a
+substrate-agnostic communication problem, following the Nerve
+Protocol~\citep{saillant2026nervewml} which decouples protocol from
+substrate via discrete codebook plus phase-amplitude
+multiplexing. \textsc{QueryConditionedF} can be viewed as a
+specialization: the text encoder is the ``source substrate'' and the
+psycholinguistic simplex is the ``target substrate,'' with the JEPA
+decoder playing the role of a translator. This framing is made
+explicit in our companion full paper (in preparation).

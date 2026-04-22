@@ -2,10 +2,87 @@
 \label{sec:discussion}
 
 \paragraph{Relation to active inference.}
-Equation~\ref{eq:F} is a faithful instantiation of the variational free energy with an amortized accuracy decoder. The JKO step coincides with the Wasserstein-lifted variational update, which in the convex regime would yield the unique posterior. Our \( F \) is non-convex through the JEPA term; we observe in practice that 10 JKO steps suffice to produce informative \(\rho_\tau \to \rho_{\tau+1}\) pairs without instability.
+Equation~\ref{eq:F} is a faithful instantiation of the variational
+free energy with an amortized accuracy decoder. The JKO step
+coincides with the Wasserstein-lifted variational update, which in
+the convex regime would yield the unique posterior. Our $F$ is
+non-convex through the JEPA term ; we observe in practice that 10
+JKO steps suffice to produce informative $\rho_\tau \to \rho_{\tau+1}$
+pairs without instability. The non-convexity is structural (a neural
+decoder composed with a Wasserstein metric cannot be made convex
+without collapsing the model), so we treat it as a feature to be
+managed (via step-size and step-count hyperparameters) rather than a
+bug to be eliminated. The empirical stability we observe across
+50k queries at two scales (10k, 50k) suggests that the functional is
+well-posed in the basin of attraction around the prior, even if
+global uniqueness is not guaranteed.
+
+\paragraph{What this means for the free-energy community.}
+Most active-inference implementations either (a) restrict to
+tractable posterior families (Gaussian, factorized categorical)
+that admit closed-form updates or (b) rely on message-passing
+approximations whose convergence is only local. \textsc{QueryConditionedF}
+offers a third path: use a neural amortization for the accuracy term,
+pay the price of non-convexity, and recover tractability through the
+Wasserstein geometry of JKO. This is a small but concrete data point
+that structured-latent active inference with pretrained decoders is
+feasible at realistic scale (50k queries, 0.65M--3.4M encoder
+parameters). The R3 kill-switch methodology --- ranking pilot
+architectures, freezing the top-$k$ by a pre-registered threshold,
+then scaling --- is offered as a reusable protocol for other
+free-energy benchmarks that face compute constraints.
 
 \paragraph{Limitations.}
-The semantic bin mapping currently uses a stable lemma hash rather than a true WordNet-fr or KMeans-MiniLM clustering --- an absolute identity choice that does not affect the simplex structure but does limit the cognitive interpretability of individual bins. Empirical alignment with human reading-time or fMRI data is out of scope for this workshop submission. We also defer joint self-supervised refinement of \( f_\theta \) and \( g_{\mathrm{JEPA}} \) (phase B) to a companion full paper.
+\textit{Semantic bin mapping.}
+The semantic bin mapping currently uses a stable lemma hash rather
+than a true WordNet-fr or KMeans-MiniLM clustering --- an absolute
+identity choice that does not affect the simplex structure but does
+limit the cognitive interpretability of individual bins. A swap-in
+KMeans-MiniLM replacement is straightforward and would change per-bin
+identities without changing the aggregate KL ranking.
+
+\textit{Empirical ecological validity.}
+Alignment with human reading-time or fMRI data is out of scope for
+this workshop submission; all of our validation is intrinsic to the
+simplex dynamics (KL divergence on held-out test split, MAPE on
+predicted delta, routing hit-at-5). Extrinsic validation against
+psycholinguistic behaviour is planned for the full paper.
+
+\textit{Joint training of $f_\theta$ and $g_{\mathrm{JEPA}}$.}
+We also defer joint self-supervised refinement of $f_\theta$ and
+$g_{\mathrm{JEPA}}$ (phase B) to a companion full paper. In the
+present work, the decoder is frozen during encoder training, which
+means encoder rankings depend on the specific heuristic labeler.
+Ablating the labeler (e.g., replacing Lexique.org with SUBTLEX-fr)
+would test the robustness of the ranking and is a concrete follow-up.
+
+\textit{Corpus composition.}
+The 50k hybrid corpus weights psycholinguistic seeds (B, 20\,\%),
+Wikipedia generalist (C, 40\,\%), and Qwen3.5-35B synthetic (D, 40\,\%).
+Scaling to 500k or replacing D with a distilled-model-free generator
+is an open question. The R3 kill-switch logic carries over, but
+the 15\,\% gap threshold may need re-calibration at that scale.
 
 \paragraph{Future work.}
-Phase B will train \( f_\theta \) and \( g_{\mathrm{JEPA}} \) jointly via differentiable JKO with optional contrastive variants of the JEPA loss; that line of work targets ICLR.
+Phase B will train $f_\theta$ and $g_{\mathrm{JEPA}}$ jointly via
+differentiable JKO with optional contrastive variants of the JEPA
+loss; that line of work targets ICLR. Beyond phase B, we see three
+concrete directions: (i) extending the simplex decomposition from
+four species to finer-grained Levelt-Baddeley components
+(articulatory loop, visuo-spatial sketchpad); (ii) coupling
+\textsc{QueryConditionedF} to the Nerve
+Protocol~\citep{saillant2026nervewml} to test whether text-driven
+dynamics preserve the cross-modal invariants B-1 / B-2 / B-3
+measured in \texttt{bouba\_sens}; and (iii) ablating the heuristic
+labeler against a learned labeler obtained by distilling a large
+language model's token-to-species posterior, which would make the
+functional fully end-to-end differentiable.
+
+\paragraph{Reproducibility statement.}
+All code, configs, and cached oracle runs are available at
+\url{https://github.com/hypneum-lab/kiki-flow-research} (tag to be
+assigned at submission time). Encoder training uses JAX on
+RTX 4090; the oracle runs use MLX on Apple M3 Ultra. SHA256 hashes
+of every \texttt{.safetensors} cache entry are logged in the
+submission bundle, and the R3 kill-switch decision is recorded in
+\texttt{docs/superpowers/specs/2026-04-19-query-conditioned-f-design.md}.
