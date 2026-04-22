@@ -43,6 +43,19 @@ All notable releases of `kiki-flow-research`. Dates in YYYY-MM-DD.
   `tests/track2_paper/test_separable_energy.py` (3),
   `tests/test_coupling_variants.py` (4 parametrized),
   `tests/test_lambda_monotonicity_shape.py` (1 smoke).
+- `scripts/diagnose_coupling_modes.py` and
+  `scripts/hyperparam_sweep_coupling_modes.py` — 5-mode
+  ablation tooling. The 45-point sweep (3 `alpha` x 3 `beta` x
+  5 modes x 5 seeds) writes `paper/hyperparam_sweep_coupling_modes.json`
+  plus a 5-panel heatmap and a grouped barplot under
+  `paper/figures/coupling_modes_*.png`, with a concise
+  `paper/coupling_modes_summary.md`. Runtime 220 s on GrosMac M5.
+  Headline finding: at the canonical `(alpha=10, beta=1)` point the
+  five coupling modes span only `0.007` bits of mean entropy --
+  `separable` (`1.9612`) < `{symmetric,full}-dell` (`1.9675`) <
+  `{symmetric,full}-levelt` (`1.9687`). `symmetric-*` and `*-full`
+  modes coincide to six decimals, confirming that the antisymmetric
+  drift is absorbed into the scalar energy path only via `J_sym`.
 - `PERFORMANCE.md` — single-page consolidation of every measured
   performance and quality number reported in the paper, with source
   files and reproduction commands for each entry.
