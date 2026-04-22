@@ -56,6 +56,24 @@ All notable releases of `kiki-flow-research`. Dates in YYYY-MM-DD.
   `{symmetric,full}-levelt` (`1.9687`). `symmetric-*` and `*-full`
   modes coincide to six decimals, confirming that the antisymmetric
   drift is absorbed into the scalar energy path only via `J_sym`.
+- `paper/lambda_monotonicity.json` — snapshot of the
+  empirical Conger--Hoffmann fit results cited from
+  Section~3 of the paper. `paper/main.tex` Section~3 rewritten
+  to expose the canonical `J = J_sym + J_asym` decomposition,
+  to name the Dell and Levelt coupling topologies as
+  first-class variants (cf. the two YAML files under
+  `kiki_flow_core/species/data/`), to formalise the Baddeley
+  phonological loop as a non-linear non-conservative drift
+  (`eq:phono-drift`), and to report the empirical
+  `lambda_hat = 67.79 +/- 3.78`. Sections~4 and 5 rewritten to
+  match: Section~4 clarifies that the current solver integrates
+  `b_phono` but not `b_asym` (future work), adds an ablation
+  tooling bullet, and updates the test count to 256. Section~5
+  gains `sec:coupling-ablation` (5-mode table + figure) and
+  re-labels the free-energy-decay subsection as
+  `sec:exp-lambda` with the three-seed-pair lambda fit. New bib
+  entries: `dell1986`, `levelt1999`, `baddeley1992working`,
+  `conger2025monotone`, `gallouet2017splitting`.
 - `PERFORMANCE.md` — single-page consolidation of every measured
   performance and quality number reported in the paper, with source
   files and reproduction commands for each entry.
