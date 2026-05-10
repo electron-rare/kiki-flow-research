@@ -42,6 +42,9 @@ dev = [
     "matplotlib>=3.8",
     "types-PyYAML>=6.0",
 ]
+types = [
+    "pandas-stubs>=2.4.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -69,6 +72,10 @@ disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
 module = ["ot", "ot.*", "sklearn", "sklearn.*", "sentence_transformers", "sentence_transformers.*", "datasets", "datasets.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["optax", "optax.*", "phonemizer", "phonemizer.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
