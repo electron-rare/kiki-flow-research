@@ -18,3 +18,21 @@ bench/reports/
 .remember/
 /data/
 /artifacts/
+
+# LaTeX build artefacts (workshop + arxiv_bundle paper compile)
+paper/workshop/*.aux
+paper/workshop/*.bbl
+paper/workshop/*.blg
+paper/workshop/*.fdb_latexmk
+paper/workshop/*.fls
+paper/workshop/*.log
+paper/workshop/*.out
+paper/workshop/*.toc
+paper/arxiv_bundle/*.aux
+paper/arxiv_bundle/*.bbl
+paper/arxiv_bundle/*.blg
+paper/arxiv_bundle/*.fdb_latexmk
+paper/arxiv_bundle/*.fls
+paper/arxiv_bundle/*.log
+paper/arxiv_bundle/*.out
+paper/arxiv_bundle/*.toc
