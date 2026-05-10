@@ -18,6 +18,9 @@ jobs:
       - run: uv run ruff check .
       - run: uv run mypy kiki_flow_core
       - run: uv run pytest -v --cov=kiki_flow_core --cov-fail-under=0  # TODO(Task 11): bump to --cov-fail-under=80
+      - name: Validate doc-truth (N4 Task 5)
+        continue-on-error: true
+        run: uv run python scripts/check_status_truth.py
       - name: Reproducibility double-run
         if: hashFiles('tests/test_smoke_e2e.py') != ''
         run: |
