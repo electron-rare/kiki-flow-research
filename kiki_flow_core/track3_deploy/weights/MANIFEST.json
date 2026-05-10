@@ -1,0 +1,19 @@
+{
+  "_note": "Generated 2026-05-10 by N4 Task 7. Bridge consumers should resolve weights via 'latest' field, not by hardcoded path.",
+  "files": {
+    "v0.1.safetensors": {
+      "bytes": 280016,
+      "sha256": "1ad55935aaaa5e446ec8c9968a32eb3af57568940c866e0bf615f86b30e08947"
+    },
+    "v0.2-d128.safetensors": {
+      "bytes": 920464,
+      "sha256": "896f6158ce463d1217260cae9536f602f84b1d17fff94bce6b1ca30757a4a80f"
+    },
+    "v0.3.safetensors": {
+      "bytes": 920464,
+      "sha256": "ee197de1239e8cf234b4d816ab4d99bb408366e609033fb5fced7ac2e62770c0"
+    }
+  },
+  "latest": "v0.3.safetensors",
+  "schema_version": "1.0"
+}
