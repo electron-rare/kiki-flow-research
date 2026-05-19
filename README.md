@@ -172,6 +172,15 @@ kiki-flow-research/
     └── runbooks/real-cl-bench.md   # Real-mode CL manual runbook
 ```
 
+## Program context
+
+Young-flow's Wasserstein engine is the upstream species model for the
+dream-of-kiki consolidation framework. As of 2026-05-19,
+[`dream-of-kiki/docs/specs/2026-05-20-biophysical-stratification.md`](https://github.com/hypneum-lab/dream-of-kiki/blob/main/docs/specs/2026-05-20-biophysical-stratification.md)
+§3 routes Młynarski & Hermundstad 2025 *(Convergence of efficient and
+predictive coding in multimodal sensory processing, bioRxiv 2025)* as
+the normative scaffolding for this engine.
+
 ## Citation
 
 Draft pre-print, tagged `paper-v0.4-draft`:
